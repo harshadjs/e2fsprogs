@@ -218,6 +218,8 @@ extern e2fsck_t e2fsck_global_ctx;  /* Try your very best not to use this! */
 
 #endif /* DEBUGFS */
 
+#define JFS_FAST_COMMIT_BLOCKS	128
+
 #ifndef EFSBADCRC
 #define EFSBADCRC	EXT2_ET_BAD_CRC
 #endif

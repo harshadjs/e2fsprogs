@@ -61,6 +61,8 @@ static inline __u32 jbd2_chksum(journal_t *j EXT2FS_ATTR((unused)),
 #define blkdev_issue_flush(kdev, a, b)	sync_blockdev(kdev)
 #define is_power_of_2(x)	((x) != 0 && (((x) & ((x) - 1)) == 0))
 
+enum passtype {PASS_SCAN, PASS_REVOKE, PASS_REPLAY};
+
 struct journal_s
 {
 	unsigned long		j_flags;
@@ -70,6 +72,9 @@ struct journal_s
 	int			j_format_version;
 	unsigned long		j_head;
 	unsigned long		j_tail;
+	unsigned long		j_first_fc;
+	unsigned long		j_fc_off;
+	unsigned long		j_last_fc;
 	unsigned long		j_free;
 	unsigned long		j_first, j_last;
 	kdev_t			j_dev;
@@ -85,6 +90,10 @@ struct journal_s
 	struct jbd2_revoke_table_s *j_revoke_table[2];
 	tid_t			j_failed_commit;
 	__u32			j_csum_seed;
+	int (*j_fc_replay_callback)(struct journal_s *journal,
+				    struct buffer_head *bh,
+				    enum passtype pass, int off);
+
 };
 
 #define is_journal_abort(x) 0

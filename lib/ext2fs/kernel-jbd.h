@@ -74,6 +74,7 @@ extern void * __jbd_kmalloc (char *where, size_t size, int flags, int retry);
 	__jbd_kmalloc(__FUNCTION__, (size), (flags), 1)
 
 #define JFS_MIN_JOURNAL_BLOCKS 1024
+#define JFS_FAST_COMMIT_BLOCKS 128
 
 /*
  * Internal structures used by the logging mechanism:
@@ -94,6 +95,7 @@ extern void * __jbd_kmalloc (char *where, size_t size, int flags, int retry);
 #define JFS_SUPERBLOCK_V1	3
 #define JFS_SUPERBLOCK_V2	4
 #define JFS_REVOKE_BLOCK	5
+#define JFS_FC_BLOCK		6
 
 /*
  * Standard header for all descriptor blocks:
@@ -264,6 +266,7 @@ typedef struct journal_superblock_s
 #define JFS_FEATURE_INCOMPAT_ASYNC_COMMIT	0x00000004
 #define JFS_FEATURE_INCOMPAT_CSUM_V2		0x00000008
 #define JFS_FEATURE_INCOMPAT_CSUM_V3		0x00000010
+#define JFS_FEATURE_INCOMPAT_FAST_COMMIT	0x00000020
 
 /* Features known to this kernel version: */
 #define JFS_KNOWN_COMPAT_FEATURES	0
@@ -272,7 +275,8 @@ typedef struct journal_superblock_s
 					 JFS_FEATURE_INCOMPAT_ASYNC_COMMIT|\
 					 JFS_FEATURE_INCOMPAT_64BIT|\
 					 JFS_FEATURE_INCOMPAT_CSUM_V2|\
-					 JFS_FEATURE_INCOMPAT_CSUM_V3)
+					 JFS_FEATURE_INCOMPAT_CSUM_V3|\
+					 JFS_FEATURE_INCOMPAT_FAST_COMMIT)
 
 #ifdef NO_INLINE_FUNCS
 extern size_t journal_tag_bytes(journal_t *journal);
@@ -389,6 +393,7 @@ JFS_FEATURE_INCOMPAT_FUNCS(64bit,		64BIT)
 JFS_FEATURE_INCOMPAT_FUNCS(async_commit,	ASYNC_COMMIT)
 JFS_FEATURE_INCOMPAT_FUNCS(csum2,		CSUM_V2)
 JFS_FEATURE_INCOMPAT_FUNCS(csum3,		CSUM_V3)
+JFS_FEATURE_INCOMPAT_FUNCS(fast_commit,		FAST_COMMIT)
 
 #if (defined(E2FSCK_INCLUDE_INLINE_FUNCS) || !defined(NO_INLINE_FUNCS))
 /*
