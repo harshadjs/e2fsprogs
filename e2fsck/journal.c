@@ -397,6 +397,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	struct ext2_inode_large inode;
 	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
 
+	fprintf(stderr, "JOURNAL REPLAYING\n");
 	if (pass == PASS_SCAN)
 		return ext4_journal_fc_replay_scan(journal, bh, off);
 	else if (pass != PASS_REPLAY)
@@ -431,9 +432,12 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 		ret = ext2fs_new_inode(ctx->fs, parent_ino, 0, 0, &ino);
 		if (ret)
 			return ret;
+		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
 		ret = ext2fs_link(ctx->fs, parent_ino, dname, ino, EXT2_FT_REG_FILE);
 		if (ret)
 			return ret;
+		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, ino);
+		ext2fs_mark_ib_dirty(ctx->fs);
 	} else {
 		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
 	}
@@ -460,11 +464,14 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 					EXT2_EXTENT_FLAGS_UNINIT : 0;
 
 			for (j = 0; j < newex.e_len & (EXT_INIT_MAX_LEN - 1);
-			     j++)
+			     j++) {
 				ext2fs_extent_set_bmap(handle, newex.e_lblk + j,
 					newex.e_pblk + j, newex.e_flags);
-
-		}
+				ext2fs_mark_block_bitmap2(ctx->fs->block_map,
+					newex.e_pblk + j);
+			}
+			ext2fs_mark_bb_dirty(ctx->fs);
+	}
 
 	ext2fs_extent_free(handle);
 
@@ -483,10 +490,16 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 		sizeof(struct ext2_inode_large) -
 			offsetof(struct ext2_inode_large, i_generation));
 	}
-
-	return ext2fs_write_inode_full(ctx->fs, ino,
+	ret = ext2fs_write_inode_full(ctx->fs, ino,
 		(struct ext2_inode *)&inode,
 		sizeof(struct ext2_inode_large));
+	if (ret)
+		return ret;
+
+	fprintf(stderr, "FIXING blockcount problem\n");
+	ext2fs_write_block_bitmap(ctx->fs);
+	ext2fs_write_inode_bitmap(ctx->fs);
+	return ret;
 }
 
 static errcode_t e2fsck_get_journal(e2fsck_t ctx, journal_t **ret_journal)
