@@ -842,8 +842,8 @@ static int do_one_pass(journal_t *journal,
 				goto failed;
 			continue;
 		case JFS_FC_BLOCK:
+			fprintf(stderr, "FC BLOCK FOUND\n");
 			continue;
-
 		default:
 			jbd_debug(3, "Unrecognised magic %d, end of scan.\n",
 				  blocktype);
