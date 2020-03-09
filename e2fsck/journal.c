@@ -278,6 +278,217 @@ static int process_journal_block(ext2_filsys fs,
 	return 0;
 }
 
+#define FIRST_TL(__hdr)	(struct ext4_fc_tl *)((__hdr) + 1)
+#define NEXT_TL(__tl)	(struct ext4_fc_tl *)((__u8 *)(__tl) +		\
+				   ext2fs_le16_to_cpu((__tl)->fc_len) +	\
+				   sizeof(*(__tl)))
+#define NUM_TLS(__hdr)	ext2fs_le16_to_cpu((__hdr)->fc_num_tlvs)
+
+static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
+				       int off)
+{
+	e2fsck_t ctx = j->j_fs_dev->k_ctx;
+	struct e2fsck_fc_replay_state *state;
+	struct ext4_fc_commit_hdr *fc_hdr;
+	struct ext4_fc_tl *tl;
+	__u32 csum, dummy_csum = 0;
+	__u8 *start;
+	tid_t fc_subtid;
+	int i;
+
+	state = &ctx->fc_replay_state;
+	fc_hdr = (struct ext4_fc_commit_hdr *)
+		  ((__u8 *)bh->b_data + sizeof(journal_header_t));
+
+	fc_subtid = ext2fs_le32_to_cpu(fc_hdr->fc_subtid);
+
+	if (ext2fs_le32_to_cpu(fc_hdr->fc_magic) != EXT4_FC_MAGIC) {
+		state->fc_replay_error = -ENOENT;
+		goto out_err;
+	}
+
+	if (off != state->fc_replay_expected_off) {
+		state->fc_replay_error = -EFSCORRUPTED;
+		goto out_err;
+	}
+
+	if (ext2fs_le16_to_cpu(fc_hdr->fc_features)) {
+		state->fc_replay_error = -EOPNOTSUPP;
+		goto out_err;
+	}
+
+	/* Check if we already concluded that this fast commit is not useful */
+	if (state->fc_replay_error && state->fc_replay_error != -EPROTO)
+		goto out_err;
+
+	if (state->fc_replay_expected_off == 0) {
+		/* This is a first block */
+		state->fc_replay_current_subtid = fc_subtid;
+		/*
+		 * We set replay error by default until we find an end
+		 * block for a particular subtid
+		 */
+		state->fc_replay_error = -EPROTO;
+	}
+
+	if (state->fc_replay_error == 0) {
+		/*
+		 * We have already encountered _last_ block for previous
+		 * subtid. So we should only find a bigger subtid here.
+		 */
+		if (fc_subtid <= state->fc_replay_current_subtid) {
+			state->fc_replay_error = -EFSCORRUPTED;
+			goto out_err;
+		}
+		state->fc_replay_current_subtid = fc_subtid;
+		state->fc_replay_error = -EPROTO;
+	} else if (state->fc_replay_current_subtid != fc_subtid) {
+		/*
+		 * Different subtid found before we found the end of this
+		 * subtid.
+		 */
+		state->fc_replay_error = -EFSCORRUPTED;
+		goto out_err;
+	}
+
+	/*
+	 * We can replay fast commit blocks only if we find a _last_ block for
+	 * all subtids.
+	 */
+	if (ext4_fc_is_last(fc_hdr))
+		state->fc_replay_error = 0;
+
+	csum = jbd2_chksum(j, 0, fc_hdr,
+			   offsetof(struct ext4_fc_commit_hdr, fc_csum));
+	csum = jbd2_chksum(j, csum, &dummy_csum, sizeof(dummy_csum));
+
+	start = (__u8 *)FIRST_TL(fc_hdr);
+	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
+		i++, tl = NEXT_TL(tl))
+		if (!(ext2fs_le16_to_cpu(tl->fc_tag) &
+			(EXT4_FC_TAG_PARENT_INO |
+			 EXT4_FC_TAG_DNAME |
+			 EXT4_FC_TAG_EXT)))
+			goto out_err;
+	csum = jbd2_chksum(j, csum, start, (__u8 *)tl - start);
+	if (csum != ext2fs_le32_to_cpu(fc_hdr->fc_csum)) {
+		state->fc_replay_error = -EFSBADCRC;
+		goto out_err;
+	}
+
+	state->fc_replay_expected_off++;
+	return 0;
+
+out_err:
+	return state->fc_replay_error;
+}
+
+static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
+				     enum passtype pass, int off)
+{
+	struct ext4_fc_commit_hdr *fc_hdr;
+	struct ext4_fc_tl *tl;
+	struct ext2fs_extent newex;
+	struct ext3_extent *fc_ext;
+	ext2_extent_handle_t handle = 0;
+	int i, j, ret, ino, parent_ino = 0;
+	char dname[256] = {0};
+	__u16 fc_ext_len;
+	struct ext2_inode_large inode;
+	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
+
+	if (pass == PASS_SCAN)
+		return ext4_journal_fc_replay_scan(journal, bh, off);
+	else if (pass != PASS_REPLAY)
+		return 0;
+
+	if (ctx->fc_replay_state.fc_replay_error) {
+		jfs_debug("Scan phase detected error. Aborting replay..\n");
+		return ctx->fc_replay_state.fc_replay_error;
+	}
+
+	fc_hdr = (struct ext4_fc_commit_hdr *)
+		  ((__u8 *)bh->b_data + sizeof(journal_header_t));
+
+	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
+		i++, tl = NEXT_TL(tl))
+		switch (ext2fs_le16_to_cpu(tl->fc_tag)) {
+		case EXT4_FC_TAG_PARENT_INO:
+			parent_ino = ext2fs_le32_to_cpu(*(int *)(tl + 1));
+			break;
+		case EXT4_FC_TAG_DNAME:
+			memcpy(dname, tl + 1, ext2fs_le16_to_cpu(tl->fc_len));
+			break;
+		default:
+			break;
+		}
+
+	ret = ext2fs_read_bitmaps(ctx->fs);
+	if (ret)
+		return ret;
+
+	if (parent_ino != 0) {
+		ret = ext2fs_new_inode(ctx->fs, parent_ino, 0, 0, &ino);
+		if (ret)
+			return ret;
+		ret = ext2fs_link(ctx->fs, parent_ino, dname, ino, EXT2_FT_REG_FILE);
+		if (ret)
+			return ret;
+	} else {
+		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
+	}
+
+	ret = ext2fs_extent_open(ctx->fs, ino, &handle);
+	if (ret)
+		return ret;
+
+	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
+		i++, tl = NEXT_TL(tl))
+		if (ext2fs_le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_EXT) {
+			fc_ext = (struct ext3_extent *)(tl + 1);
+
+			memset(&newex, 0, sizeof(newex));
+			newex.e_lblk = ext2fs_le32_to_cpu(fc_ext->ee_block);
+			newex.e_pblk = ext2fs_le32_to_cpu(fc_ext->ee_start) |
+				(ext2fs_le16_to_cpu(fc_ext->ee_start_hi) << 31);
+			fc_ext_len = ext2fs_le16_to_cpu(fc_ext->ee_len);
+			if (fc_ext_len > EXT_INIT_MAX_LEN)
+				newex.e_len = fc_ext_len - EXT_INIT_MAX_LEN;
+			else
+				newex.e_len = fc_ext_len;
+			newex.e_flags = fc_ext_len >= EXT_INIT_MAX_LEN ?
+					EXT2_EXTENT_FLAGS_UNINIT : 0;
+
+			for (j = 0; j < newex.e_len & (EXT_INIT_MAX_LEN - 1);
+			     j++)
+				ext2fs_extent_set_bmap(handle, newex.e_lblk + j,
+					newex.e_pblk + j, newex.e_flags);
+
+		}
+
+	ext2fs_extent_free(handle);
+
+	ret = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&inode,
+				     sizeof(struct ext2_inode_large));
+	if (ret)
+		return ret;
+
+	if (inode.i_flags & EXT4_INLINE_DATA_FL) {
+		memcpy(&inode, &fc_hdr->inode, sizeof(struct ext2_inode_large));
+	} else {
+		memcpy(&inode, &fc_hdr->inode,
+			offsetof(struct ext2_inode_large, i_block));
+		memcpy(&inode.i_generation,
+			&fc_hdr->inode.i_generation,
+		sizeof(struct ext2_inode_large) -
+			offsetof(struct ext2_inode_large, i_generation));
+	}
+
+	return ext2fs_write_inode_full(ctx->fs, ino,
+		(struct ext2_inode *)&inode,
+		sizeof(struct ext2_inode_large));
+}
+
 static errcode_t e2fsck_get_journal(e2fsck_t ctx, journal_t **ret_journal)
 {
 	struct process_block_struct pb;
@@ -514,6 +725,10 @@ static errcode_t e2fsck_get_journal(e2fsck_t ctx, journal_t **ret_journal)
 
 	journal->j_sb_buffer = bh;
 	journal->j_superblock = (journal_superblock_t *)bh->b_data;
+	if (ext2fs_has_feature_fast_commit(ctx->fs->super))
+		journal->j_fc_replay_callback = ext4_journal_fc_replay_cb;
+	else
+		journal->j_fc_replay_callback = NULL;
 
 #ifdef USE_INODE_IO
 	if (j_inode)
@@ -688,7 +903,15 @@ static errcode_t e2fsck_journal_load(journal_t *journal)
 	journal->j_transaction_sequence = journal->j_tail_sequence;
 	journal->j_tail = ntohl(jsb->s_start);
 	journal->j_first = ntohl(jsb->s_first);
-	journal->j_last = ntohl(jsb->s_maxlen);
+	if (jbd2_has_feature_fast_commit(journal)) {
+		fprintf(stderr, "fast commit is on!!\n");
+		journal->j_last_fc = ntohl(jsb->s_maxlen);
+		journal->j_last = journal->j_last_fc - JFS_FAST_COMMIT_BLOCKS;
+		journal->j_first_fc = journal->j_last + 1;
+	} else {
+		fprintf(stderr, "fast commit is off!!\n");
+		journal->j_last = ntohl(jsb->s_maxlen);
+	}
 
 	return 0;
 }
@@ -951,9 +1174,13 @@ static errcode_t recover_ext3_journal(e2fsck_t ctx)
 	if (retval)
 		goto errout;
 
+	fprintf(stderr, "Trying journal recovery\n");
 	retval = -jbd2_journal_recover(journal);
-	if (retval)
+	if (retval) {
+		fprintf(stderr, "Journalb recovery failed\n");
 		goto errout;
+	}
+	fprintf(stderr, "Journal recovery ok\n");
 
 	if (journal->j_failed_commit) {
 		pctx.ino = journal->j_failed_commit;
@@ -986,11 +1213,13 @@ errcode_t e2fsck_run_ext3_journal(e2fsck_t ctx)
 		       ctx->device_name);
 		return EXT2_ET_FILE_RO;
 	}
-
+	fprintf(stderr, "HELLO\n");
 	if (ctx->fs->flags & EXT2_FLAG_DIRTY)
 		ext2fs_flush(ctx->fs);	/* Force out any modifications */
 
+	fprintf(stderr, "Trying recovery\n");
 	recover_retval = recover_ext3_journal(ctx);
+	fprintf(stderr, "Ret - %d\n", recover_retval);
 
 	/*
 	 * Reload the filesystem context to get up-to-date data from disk

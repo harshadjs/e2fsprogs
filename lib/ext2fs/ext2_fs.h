@@ -490,6 +490,49 @@ struct ext2_inode_large {
 /*9c*/	__u32   i_projid;       /* Project ID */
 };
 
+/* Fast commit stuff */
+/* Ext4 fast commit related info */
+
+/* Magic of fast commit header */
+#define EXT4_FC_MAGIC			0xE2540090
+
+#define EXT4_FC_FL_LAST			0x00000001
+
+#define ext4_fc_is_last(__fc_hdr)	(((__fc_hdr)->fc_flags) &	\
+					 EXT4_FC_FL_LAST)
+
+#define ext4_fc_mark_last(__fc_hdr)	(((__fc_hdr)->fc_flags) |=	\
+					 EXT4_FC_FL_LAST)
+
+struct ext4_fc_commit_hdr {
+	/* Fast commit magic, should be EXT4_FC_MAGIC */
+	__u32 fc_magic;
+	/* Sub transaction ID */
+	__u32 fc_subtid;
+	/* Features used by this fast commit block */
+	__u8 fc_features;
+	/* Flags for this block. */
+	__u8 fc_flags;
+	/* Number of TLVs in this fast commmit block */
+	__u16 fc_num_tlvs;
+	/* Inode number */
+	__u32 fc_ino;
+	/* ext4 inode on disk copy */
+	struct ext2_inode_large inode;
+	/* Csum(hdr+contents) */
+	__u32 fc_csum;
+};
+
+#define EXT4_FC_TAG_EXT		0x1	/* Extent */
+#define EXT4_FC_TAG_DNAME	0x2
+#define EXT4_FC_TAG_PARENT_INO	0x3
+
+struct ext4_fc_tl {
+	__le16 fc_tag;
+	__le16 fc_len;
+};
+
+
 #define EXT4_INODE_CSUM_HI_EXTRA_END	\
 	(offsetof(struct ext2_inode_large, i_checksum_hi) + sizeof(__u16) - \
 	 EXT2_GOOD_OLD_INODE_SIZE)
