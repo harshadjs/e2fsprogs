@@ -269,6 +269,12 @@ int jbd2_journal_recover(journal_t *journal)
 
 	struct recovery_info	info;
 
+	if (JBD2_HAS_INCOMPAT_FEATURE(journal,
+				      JBD2_FEATURE_INCOMPAT_FAST_COMMIT)) {
+		/* Only kernel can recover using fast commit blocks */
+		return 0;
+	}
+
 	memset(&info, 0, sizeof(info));
 	sb = journal->j_superblock;
 
