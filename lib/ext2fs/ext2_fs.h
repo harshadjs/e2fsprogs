@@ -507,18 +507,12 @@ struct ext2_inode_large {
 struct ext4_fc_commit_hdr {
 	/* Fast commit magic, should be EXT4_FC_MAGIC */
 	__u32 fc_magic;
-	/* Sub transaction ID */
-	__u32 fc_subtid;
 	/* Features used by this fast commit block */
 	__u8 fc_features;
-	/* Flags for this block. */
-	__u8 fc_flags;
 	/* Number of TLVs in this fast commmit block */
 	__u16 fc_num_tlvs;
 	/* Inode number */
 	__u32 fc_ino;
-	/* ext4 inode on disk copy */
-	struct ext2_inode_large inode;
 	/* Csum(hdr+contents) */
 	__u32 fc_csum;
 };

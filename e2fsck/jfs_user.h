@@ -274,4 +274,6 @@ extern void	jbd2_journal_clear_revoke(journal_t *);
 #define cpu_to_be32(x)		ext2fs_cpu_to_be32(x)
 #define cpu_to_be16(x)		ext2fs_cpu_to_be16(x)
 
+#define pr_warn(...)
+
 #endif /* _JFS_USER_H */

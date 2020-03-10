@@ -291,16 +291,19 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 	struct e2fsck_fc_replay_state *state;
 	struct ext4_fc_commit_hdr *fc_hdr;
 	struct ext4_fc_tl *tl;
-	__u32 csum, dummy_csum = 0;
-	__u8 *start;
-	tid_t fc_subtid;
-	int i;
+	__u32 csum, old_csum;
+	__u8 *start, *end;
 
 	state = &ctx->fc_replay_state;
 	fc_hdr = (struct ext4_fc_commit_hdr *)
 		  ((__u8 *)bh->b_data + sizeof(journal_header_t));
 
-	fc_subtid = ext2fs_le32_to_cpu(fc_hdr->fc_subtid);
+	start = (__u8 *)fc_hdr;
+	end = (__u8 *)bh->b_data + j->j_blocksize;
+
+	/* Check if we already concluded that this fast commit is not useful */
+	if (state->fc_replay_expected_off && state->fc_replay_error)
+		goto out_err;
 
 	if (ext2fs_le32_to_cpu(fc_hdr->fc_magic) != EXT4_FC_MAGIC) {
 		state->fc_replay_error = -ENOENT;
@@ -312,71 +315,23 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 		goto out_err;
 	}
 
+	state->fc_replay_expected_off++;
+
 	if (ext2fs_le16_to_cpu(fc_hdr->fc_features)) {
 		state->fc_replay_error = -EOPNOTSUPP;
 		goto out_err;
 	}
 
-	/* Check if we already concluded that this fast commit is not useful */
-	if (state->fc_replay_error && state->fc_replay_error != -EPROTO)
-		goto out_err;
+	old_csum = fc_hdr->fc_csum;
+	fc_hdr->fc_csum = 0;
+	csum = jbd2_chksum(j, 0, start, end - start);
+	fc_hdr->fc_csum = old_csum;
 
-	if (state->fc_replay_expected_off == 0) {
-		/* This is a first block */
-		state->fc_replay_current_subtid = fc_subtid;
-		/*
-		 * We set replay error by default until we find an end
-		 * block for a particular subtid
-		 */
-		state->fc_replay_error = -EPROTO;
-	}
-
-	if (state->fc_replay_error == 0) {
-		/*
-		 * We have already encountered _last_ block for previous
-		 * subtid. So we should only find a bigger subtid here.
-		 */
-		if (fc_subtid <= state->fc_replay_current_subtid) {
-			state->fc_replay_error = -EFSCORRUPTED;
-			goto out_err;
-		}
-		state->fc_replay_current_subtid = fc_subtid;
-		state->fc_replay_error = -EPROTO;
-	} else if (state->fc_replay_current_subtid != fc_subtid) {
-		/*
-		 * Different subtid found before we found the end of this
-		 * subtid.
-		 */
-		state->fc_replay_error = -EFSCORRUPTED;
-		goto out_err;
-	}
-
-	/*
-	 * We can replay fast commit blocks only if we find a _last_ block for
-	 * all subtids.
-	 */
-	if (ext4_fc_is_last(fc_hdr))
-		state->fc_replay_error = 0;
-
-	csum = jbd2_chksum(j, 0, fc_hdr,
-			   offsetof(struct ext4_fc_commit_hdr, fc_csum));
-	csum = jbd2_chksum(j, csum, &dummy_csum, sizeof(dummy_csum));
-
-	start = (__u8 *)FIRST_TL(fc_hdr);
-	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
-		i++, tl = NEXT_TL(tl))
-		if (!(ext2fs_le16_to_cpu(tl->fc_tag) &
-			(EXT4_FC_TAG_PARENT_INO |
-			 EXT4_FC_TAG_DNAME |
-			 EXT4_FC_TAG_EXT)))
-			goto out_err;
-	csum = jbd2_chksum(j, csum, start, (__u8 *)tl - start);
 	if (csum != ext2fs_le32_to_cpu(fc_hdr->fc_csum)) {
 		state->fc_replay_error = -EFSBADCRC;
 		goto out_err;
 	}
 
-	state->fc_replay_expected_off++;
 	return 0;
 
 out_err:
@@ -481,15 +436,16 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 		return ret;
 
 	if (inode.i_flags & EXT4_INLINE_DATA_FL) {
-		memcpy(&inode, &fc_hdr->inode, sizeof(struct ext2_inode_large));
+		memcpy(&inode, fc_hdr + 1, sizeof(struct ext2_inode_large));
 	} else {
-		memcpy(&inode, &fc_hdr->inode,
+		memcpy(&inode, fc_hdr + 1,
 			offsetof(struct ext2_inode_large, i_block));
 		memcpy(&inode.i_generation,
-			&fc_hdr->inode.i_generation,
-		sizeof(struct ext2_inode_large) -
-			offsetof(struct ext2_inode_large, i_generation));
+		       &((struct ext2_inode_large *)(fc_hdr + 1))->i_generation,
+		       sizeof(struct ext2_inode_large) -
+		       offsetof(struct ext2_inode_large, i_generation));
 	}
+
 	ret = ext2fs_write_inode_full(ctx->fs, ino,
 		(struct ext2_inode *)&inode,
 		sizeof(struct ext2_inode_large));
@@ -499,6 +455,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	fprintf(stderr, "FIXING blockcount problem\n");
 	ext2fs_write_block_bitmap(ctx->fs);
 	ext2fs_write_inode_bitmap(ctx->fs);
+	ext2fs_set_gdt_csum(ctx->fs);
 	return ret;
 }
 

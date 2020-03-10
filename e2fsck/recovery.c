@@ -39,7 +39,7 @@ struct recovery_info
 };
 
 static int do_one_pass(journal_t *journal,
-			struct recovery_info *info, enum passtype pass);
+				struct recovery_info *info, enum passtype pass);
 static int scan_revoke_records(journal_t *, struct buffer_head *,
 				tid_t, struct recovery_info *);
 
@@ -235,6 +235,55 @@ do {									\
 		var -= (_wrap_last - (journal)->j_first);		\
 } while (0)
 
+static int fc_do_one_pass(journal_t *journal,
+			  struct recovery_info *info, enum passtype pass)
+{
+	unsigned int expected_commit_id = info->end_transaction;
+	unsigned long next_fc_block;
+	struct buffer_head *bh;
+	unsigned int seq;
+	journal_header_t *jhdr;
+	int err = 0;
+
+	next_fc_block = journal->j_first_fc;
+
+	while (next_fc_block <= journal->j_last_fc) {
+		jbd_debug(3, "Fast commit replay: next block %ld",
+			  next_fc_block);
+		err = jread(&bh, journal, next_fc_block);
+		if (err) {
+			jbd_debug(3, "Fast commit replay: read error");
+			break;
+		}
+
+		jhdr = (journal_header_t *)bh->b_data;
+		seq = be32_to_cpu(jhdr->h_sequence);
+		if (be32_to_cpu(jhdr->h_magic) != JBD2_MAGIC_NUMBER ||
+		    seq != expected_commit_id) {
+			jbd_debug(3, "Fast commit replay: magic / commitid error [%d / %d / %d]\n",
+				  be32_to_cpu(jhdr->h_magic), seq,
+				  expected_commit_id);
+			break;
+		}
+		jbd_debug(3, "Processing fast commit blk with seq %d",
+			  seq);
+		if (journal->j_fc_replay_callback) {
+			err = journal->j_fc_replay_callback(
+						journal, bh, pass,
+						next_fc_block -
+						journal->j_first_fc);
+			if (err)
+				break;
+		}
+		next_fc_block++;
+	}
+
+	if (err)
+		jbd_debug(3, "Fast commit replay failed, err = %d\n", err);
+
+	return err;
+}
+
 /**
  * jbd2_journal_recover - recovers a on-disk journal
  * @journal: the journal to recover
@@ -419,56 +468,6 @@ static int jbd2_block_tag_csum_verify(journal_t *j, journal_block_tag_t *tag,
 		return tag->t_checksum == cpu_to_be16(csum32);
 }
 
-static int fc_do_one_pass(journal_t *journal,
-			  struct recovery_info *info, enum passtype pass)
-{
-	unsigned int expected_commit_id = info->end_transaction;
-	unsigned long next_fc_block;
-	struct buffer_head *bh;
-	unsigned int seq;
-	journal_header_t *jhdr;
-	int err = 0;
-
-	next_fc_block = journal->j_first_fc;
-
-	while (next_fc_block <= journal->j_last_fc) {
-		jbd_debug(3, "Fast commit replay: next block %lld\n",
-			  next_fc_block);
-		err = jread(&bh, journal, next_fc_block);
-		if (err)
-			break;
-
-		jhdr = (journal_header_t *)bh->b_data;
-		seq = be32_to_cpu(jhdr->h_sequence);
-		if (be32_to_cpu(jhdr->h_magic) != JBD2_MAGIC_NUMBER ||
-		    seq != expected_commit_id) {
-			jbd_debug(3, "stopping because: %x vs %x\n",
-				jhdr->h_magic, JBD2_MAGIC_NUMBER);
-			jbd_debug(3, "stopping because: %x vs %x\n",
-				seq, expected_commit_id);
-
-			break;
-		}
-		jbd_debug(3, "Processing fast commit blk with seq %d\n",
-			  seq);
-		if (journal->j_fc_replay_callback) {
-			err = journal->j_fc_replay_callback(
-						journal, bh, pass,
-						next_fc_block -
-						journal->j_first_fc);
-			if (err)
-				break;
-		}
-		next_fc_block++;
-	}
-
-	if (err)
-		jbd_debug(3, "Fast commit replay failed, err = %d\n", err);
-
-	return err;
-}
-
-
 static int do_one_pass(journal_t *journal,
 			struct recovery_info *info, enum passtype pass)
 {
@@ -500,6 +499,7 @@ static int do_one_pass(journal_t *journal,
 		info->start_transaction = first_commit_ID;
 
 	jbd_debug(1, "Starting recovery pass %d\n", pass);
+
 	/*
 	 * Now we walk through the log, transaction by transaction,
 	 * making sure that each transaction has a commit block in the
@@ -721,7 +721,7 @@ static int do_one_pass(journal_t *journal,
 			 *		| GO TO NEXT    "Journal Corruption"
 			 *		| TRANSACTION
 			 *		|
-			 * {(n+1)th transaction}
+			 * {(n+1)th transanction}
 			 *		|
 			 * 	 _______|______________
 			 * 	|	 	      |
@@ -824,8 +824,9 @@ static int do_one_pass(journal_t *journal,
 				goto failed;
 			continue;
 		case JBD2_FC_BLOCK:
-			fprintf(stderr, "FC BLOCK FOUND\n");
+			pr_warn("Unexpectedly found fast commit block.\n");
 			continue;
+
 		default:
 			jbd_debug(3, "Unrecognised magic %d, end of scan.\n",
 				  blocktype);
@@ -857,9 +858,8 @@ static int do_one_pass(journal_t *journal,
 		}
 	}
 
-
 	if (jbd2_has_feature_fast_commit(journal) && pass != PASS_REVOKE)
-		fc_do_one_pass(journal, info, pass);
+		success = fc_do_one_pass(journal, info, pass);
 
 	if (block_error && success == 0)
 		success = -EIO;
