@@ -39,7 +39,7 @@ struct recovery_info
 };
 
 static int do_one_pass(journal_t *journal,
-				struct recovery_info *info, enum passtype pass);
+			struct recovery_info *info, enum passtype pass);
 static int scan_revoke_records(journal_t *, struct buffer_head *,
 				tid_t, struct recovery_info *);
 
@@ -254,12 +254,6 @@ int jbd2_journal_recover(journal_t *journal)
 
 	struct recovery_info	info;
 
-	if (JBD2_HAS_INCOMPAT_FEATURE(journal,
-				      JBD2_FEATURE_INCOMPAT_FAST_COMMIT)) {
-		/* Only kernel can recover using fast commit blocks */
-		return 0;
-	}
-
 	memset(&info, 0, sizeof(info));
 	sb = journal->j_superblock;
 
@@ -448,6 +442,11 @@ static int fc_do_one_pass(journal_t *journal,
 		seq = be32_to_cpu(jhdr->h_sequence);
 		if (be32_to_cpu(jhdr->h_magic) != JBD2_MAGIC_NUMBER ||
 		    seq != expected_commit_id) {
+			jbd_debug(3, "stopping because: %x vs %x\n",
+				jhdr->h_magic, JBD2_MAGIC_NUMBER);
+			jbd_debug(3, "stopping because: %x vs %x\n",
+				seq, expected_commit_id);
+
 			break;
 		}
 		jbd_debug(3, "Processing fast commit blk with seq %d\n",
