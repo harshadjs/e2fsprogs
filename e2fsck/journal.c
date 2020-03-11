@@ -280,9 +280,9 @@ static int process_journal_block(ext2_filsys fs,
 
 #define FIRST_TL(__hdr)	(struct ext4_fc_tl *)((__hdr) + 1)
 #define NEXT_TL(__tl)	(struct ext4_fc_tl *)((__u8 *)(__tl) +		\
-				   ext2fs_le16_to_cpu((__tl)->fc_len) +	\
+				   le16_to_cpu((__tl)->fc_len) +	\
 				   sizeof(*(__tl)))
-#define NUM_TLS(__hdr)	ext2fs_le16_to_cpu((__hdr)->fc_num_tlvs)
+#define NUM_TLS(__hdr)	le16_to_cpu((__hdr)->fc_num_tlvs)
 
 static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 				       int off)
@@ -305,7 +305,7 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 	if (state->fc_replay_expected_off && state->fc_replay_error)
 		goto out_err;
 
-	if (ext2fs_le32_to_cpu(fc_hdr->fc_magic) != EXT4_FC_MAGIC) {
+	if (le32_to_cpu(fc_hdr->fc_magic) != EXT4_FC_MAGIC) {
 		state->fc_replay_error = -ENOENT;
 		goto out_err;
 	}
@@ -317,7 +317,7 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 
 	state->fc_replay_expected_off++;
 
-	if (ext2fs_le16_to_cpu(fc_hdr->fc_features)) {
+	if (le16_to_cpu(fc_hdr->fc_features)) {
 		state->fc_replay_error = -EOPNOTSUPP;
 		goto out_err;
 	}
@@ -327,7 +327,7 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 	csum = jbd2_chksum(j, 0, start, end - start);
 	fc_hdr->fc_csum = old_csum;
 
-	if (csum != ext2fs_le32_to_cpu(fc_hdr->fc_csum)) {
+	if (csum != le32_to_cpu(fc_hdr->fc_csum)) {
 		state->fc_replay_error = -EFSBADCRC;
 		goto out_err;
 	}
@@ -338,17 +338,150 @@ out_err:
 	return state->fc_replay_error;
 }
 
+#ifdef notyet
+static unused()
+{
+		if (parent_ino != 0) {
+		ret = ext2fs_new_inode(ctx->fs, parent_ino, 0, 0, &ino);
+		if (ret)
+			return ret;
+		ret = ext2fs_link(ctx->fs, parent_ino, dname, ino, EXT2_FT_REG_FILE);
+		if (ret)
+			return ret;
+		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, ino);
+		ext2fs_mark_ib_dirty(ctx->fs);
+	} else {
+		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
+	}
+
+
+}
+#endif
+
+static int fc_add_range(journal_t *journal, int ino, struct ext3_extent *ex)
+{
+#ifdef notyet
+	struct ext2fs_extent newex;
+	__u16 fc_ext_len;
+	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
+
+
+	memset(&newex, 0, sizeof(newex));
+	newex.e_lblk = ext2fs_le32_to_cpu(fc_ext->ee_block);
+	newex.e_pblk = ext2fs_le32_to_cpu(fc_ext->ee_start) |
+		(ext2fs_le16_to_cpu(fc_ext->ee_start_hi) << 31);
+	fc_ext_len = ext2fs_le16_to_cpu(fc_ext->ee_len);
+	if (fc_ext_len > EXT_INIT_MAX_LEN)
+		newex.e_len = fc_ext_len - EXT_INIT_MAX_LEN;
+	else
+		newex.e_len = fc_ext_len;
+	newex.e_flags = fc_ext_len >= EXT_INIT_MAX_LEN ?
+			EXT2_EXTENT_FLAGS_UNINIT : 0;
+
+	for (j = 0; j < newex.e_len & (EXT_INIT_MAX_LEN - 1);
+		j++) {
+		ext2fs_extent_set_bmap(handle, newex.e_lblk + j,
+			newex.e_pblk + j, newex.e_flags);
+		ext2fs_mark_block_bitmap2(ctx->fs->block_map,
+			newex.e_pblk + j);
+	}
+	ext2fs_mark_bb_dirty(ctx->fs);
+#endif
+}
+
+/* Get length of a particular tlv */
+static int fc_tag_len(struct ext4_fc_tl *tl)
+{
+	return le16_to_cpu(tl->fc_len);
+}
+
+/* Get a pointer to "value" of a tlv */
+static __u8 *fc_tag_val(struct ext4_fc_tl *tl)
+{
+	return (__u8 *)tl + sizeof(*tl);
+}
+
+static int fc_replay_dentries(journal_t *j,
+			struct ext4_fc_commit_hdr *fc_hdr)
+{
+	int inode_len = EXT2_GOOD_OLD_INODE_SIZE, ret, i;
+	struct ext4_fc_dentry_info *fcd;
+	 ext2_filsys fs = j->j_fs_dev->k_ctx->fs;
+	struct ext2_inode *inode;
+	struct ext4_fc_tl *tl;
+	int parent_ino, ino;
+	char *dname;
+
+	if (EXT2_INODE_SIZE(fs->super)
+				> EXT2_GOOD_OLD_INODE_SIZE)
+		inode_len +=
+			ext2fs_le16_to_cpu(((struct ext2_inode_large *)
+				        (fc_hdr + 1))->i_extra_isize);
+	tl = (struct ext4_fc_tl *)((__u8 *)fc_hdr +
+				   sizeof(struct ext4_fc_commit_hdr) +
+				   inode_len);
+	for (i = 0; i < le16_to_cpu(fc_hdr->fc_num_tlvs); i++) {
+		fcd = (struct ext4_fc_dentry_info *)fc_tag_val(tl);
+
+		parent_ino = le32_to_cpu(fcd->fc_parent_ino);
+		ino = le32_to_cpu(fcd->fc_ino);
+		dname = strndup(fcd->fc_dname, fc_tag_len(tl) -
+				sizeof(struct ext4_fc_dentry_info));
+		if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_ADD_DENTRY) {
+			ret = ext2fs_link(fs, parent_ino, dname, ino,
+					  EXT2_FT_REG_FILE);
+			free(dname);
+			if (ret)
+				return ret;
+			ext2fs_mark_inode_bitmap2(
+				fs->inode_map, ino);
+			ext2fs_mark_ib_dirty(fs);
+		} else if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_DEL_DENTRY) {
+		} else if (le16_to_cpu(tl->fc_tag) ==
+			    EXT4_FC_TAG_CREAT_DENTRY) {
+			ext2fs_mark_inode_bitmap2(fs->inode_map, ino);
+			ret = ext2fs_link(fs, parent_ino, dname, ino,
+					  EXT2_FT_REG_FILE);
+			if (ret) {
+				free(dname);
+				return ret;
+			}
+			free(dname);
+
+			inode = (struct ext2_inode *)malloc(inode_len);
+			if (!inode)
+				return -ENOMEM;
+			ret = ext2fs_read_inode_full(fs, ino, inode, inode_len);
+			if (ret) {
+				free(inode);
+				return ret;
+			}
+			memcpy(inode, (struct ext2_inode *)(fc_hdr + 1),
+				inode_len);
+			ret = ext2fs_write_inode_full(fs, ino, inode,
+						      inode_len);
+			if (ret) {
+				free(inode);
+				return ret;
+			}
+			free(inode);
+			ext2fs_mark_ib_dirty(fs);
+		}
+		tl = (struct ext4_fc_tl *)((__u8 *)tl +
+					   le16_to_cpu(tl->fc_len) +
+					   sizeof(*tl));
+	}
+	return 0;
+}
+
 static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 				     enum passtype pass, int off)
 {
 	struct ext4_fc_commit_hdr *fc_hdr;
 	struct ext4_fc_tl *tl;
-	struct ext2fs_extent newex;
 	struct ext3_extent *fc_ext;
 	ext2_extent_handle_t handle = 0;
-	int i, j, ret, ino, parent_ino = 0;
-	char dname[256] = {0};
-	__u16 fc_ext_len;
+	int i, ret, ino;
 	struct ext2_inode_large inode;
 	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
 
@@ -365,67 +498,30 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 
 	fc_hdr = (struct ext4_fc_commit_hdr *)
 		  ((__u8 *)bh->b_data + sizeof(journal_header_t));
-
-	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
-		i++, tl = NEXT_TL(tl))
-		switch (ext2fs_le16_to_cpu(tl->fc_tag)) {
-		case EXT4_FC_TAG_PARENT_INO:
-			parent_ino = ext2fs_le32_to_cpu(*(int *)(tl + 1));
-			break;
-		case EXT4_FC_TAG_DNAME:
-			memcpy(dname, tl + 1, ext2fs_le16_to_cpu(tl->fc_len));
-			break;
-		default:
-			break;
-		}
+	ret = fc_replay_dentries(journal, fc_hdr);
+	if (ret)
+		return ret;
 
 	ret = ext2fs_read_bitmaps(ctx->fs);
 	if (ret)
 		return ret;
 
-	if (parent_ino != 0) {
-		ret = ext2fs_new_inode(ctx->fs, parent_ino, 0, 0, &ino);
-		if (ret)
-			return ret;
-		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
-		ret = ext2fs_link(ctx->fs, parent_ino, dname, ino, EXT2_FT_REG_FILE);
-		if (ret)
-			return ret;
-		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, ino);
-		ext2fs_mark_ib_dirty(ctx->fs);
-	} else {
-		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
-	}
+	ino = le32_to_cpu(fc_hdr->fc_ino);
 
 	ret = ext2fs_extent_open(ctx->fs, ino, &handle);
 	if (ret)
 		return ret;
 
 	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
-		i++, tl = NEXT_TL(tl))
-		if (ext2fs_le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_EXT) {
+		i++, tl = NEXT_TL(tl)) {
+		switch(le16_to_cpu(tl->fc_tag)) {
+		case EXT4_FC_TAG_ADD_RANGE:
 			fc_ext = (struct ext3_extent *)(tl + 1);
-
-			memset(&newex, 0, sizeof(newex));
-			newex.e_lblk = ext2fs_le32_to_cpu(fc_ext->ee_block);
-			newex.e_pblk = ext2fs_le32_to_cpu(fc_ext->ee_start) |
-				(ext2fs_le16_to_cpu(fc_ext->ee_start_hi) << 31);
-			fc_ext_len = ext2fs_le16_to_cpu(fc_ext->ee_len);
-			if (fc_ext_len > EXT_INIT_MAX_LEN)
-				newex.e_len = fc_ext_len - EXT_INIT_MAX_LEN;
-			else
-				newex.e_len = fc_ext_len;
-			newex.e_flags = fc_ext_len >= EXT_INIT_MAX_LEN ?
-					EXT2_EXTENT_FLAGS_UNINIT : 0;
-
-			for (j = 0; j < newex.e_len & (EXT_INIT_MAX_LEN - 1);
-			     j++) {
-				ext2fs_extent_set_bmap(handle, newex.e_lblk + j,
-					newex.e_pblk + j, newex.e_flags);
-				ext2fs_mark_block_bitmap2(ctx->fs->block_map,
-					newex.e_pblk + j);
-			}
-			ext2fs_mark_bb_dirty(ctx->fs);
+			ret = fc_add_range(journal, ino, fc_ext);
+			break;
+		default:
+			break;
+		}
 	}
 
 	ext2fs_extent_free(handle);

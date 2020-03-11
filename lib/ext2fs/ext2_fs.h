@@ -517,15 +517,27 @@ struct ext4_fc_commit_hdr {
 	__u32 fc_csum;
 };
 
-#define EXT4_FC_TAG_EXT		0x1	/* Extent */
-#define EXT4_FC_TAG_DNAME	0x2
-#define EXT4_FC_TAG_PARENT_INO	0x3
+#define EXT4_FC_TAG_ADD_RANGE		0x1
+#define EXT4_FC_TAG_DEL_RANGE		0x2
+#define EXT4_FC_TAG_CREAT_DENTRY	0x3
+#define EXT4_FC_TAG_ADD_DENTRY		0x4
+#define EXT4_FC_TAG_DEL_DENTRY		0x5
 
 struct ext4_fc_tl {
 	__le16 fc_tag;
 	__le16 fc_len;
 };
 
+/* On disk fast commit tlv value structure for dirent tags:
+ *  - EXT4_FC_TAG_CREATE_DENTRY
+ *  - EXT4_FC_TAG_ADD_DENTRY
+ *  - EXT4_FC_TAG_DEL_DENTRY
+ */
+struct ext4_fc_dentry_info {
+	__le32 fc_parent_ino;
+	__le32 fc_ino;
+	__u8 fc_dname[0];
+};
 
 #define EXT4_INODE_CSUM_HI_EXTRA_END	\
 	(offsetof(struct ext2_inode_large, i_checksum_hi) + sizeof(__u16) - \
