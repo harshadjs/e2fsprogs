@@ -546,6 +546,10 @@ errcode_t e2fsck_should_rebuild_extents(e2fsck_t ctx,
 					struct problem_context *pctx,
 					struct extent_tree_info *eti,
 					struct ext2_extent_info *info);
+errcode_t ext2fs_add_extents(e2fsck_t ctx, struct ext2fs_extent *extents,
+			     int count, ext2_ino_t ino);
+errcode_t ext2fs_remove_extents(e2fsck_t ctx, struct ext2fs_extent *extents,
+				int count, ext2_ino_t ino);
 
 /* journal.c */
 extern errcode_t e2fsck_check_ext3_journal(e2fsck_t ctx);

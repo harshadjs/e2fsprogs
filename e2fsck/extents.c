@@ -206,6 +206,151 @@ static int find_blocks(ext2_filsys fs, blk64_t *blocknr, e2_blkcnt_t blockcnt,
 	return 0;
 }
 
+static errcode_t __rebuild_extent_tree(e2fsck_t ctx, struct extent_list *list,
+				     ext2_ino_t ino)
+{
+	struct ext2_inode_large	inode;
+	errcode_t		retval;
+	ext2_extent_handle_t	handle;
+	unsigned int		i, ext_written;
+	struct ext2fs_extent	*ex, extent;
+	blk64_t			start_val, delta;
+
+	/* Reset extent tree */
+	inode.i_flags &= ~EXT4_EXTENTS_FL;
+	memset(inode.i_block, 0, sizeof(inode.i_block));
+
+	/* Make a note of freed blocks */
+	quota_data_sub(ctx->qctx, &inode, ino,
+		       list->blocks_freed * ctx->fs->blocksize);
+	retval = ext2fs_iblk_sub_blocks(ctx->fs, EXT2_INODE(&inode),
+					list->blocks_freed);
+	if (retval)
+		goto err;
+
+	/* Now stuff extents into the file */
+	retval = ext2fs_extent_open2(ctx->fs, ino, EXT2_INODE(&inode), &handle);
+	if (retval)
+		goto err;
+
+	ext_written = 0;
+	start_val = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(&inode));
+	for (i = 0, ex = list->extents; i < list->count; i++, ex++) {
+		memcpy(&extent, ex, sizeof(struct ext2fs_extent));
+		extent.e_flags &= EXT2_EXTENT_FLAGS_UNINIT;
+		if (extent.e_flags & EXT2_EXTENT_FLAGS_UNINIT) {
+			if (extent.e_len > EXT_UNINIT_MAX_LEN) {
+				extent.e_len = EXT_UNINIT_MAX_LEN;
+				ex->e_pblk += EXT_UNINIT_MAX_LEN;
+				ex->e_lblk += EXT_UNINIT_MAX_LEN;
+				ex->e_len -= EXT_UNINIT_MAX_LEN;
+				ex--;
+				i--;
+			}
+		} else {
+			if (extent.e_len > EXT_INIT_MAX_LEN) {
+				extent.e_len = EXT_INIT_MAX_LEN;
+				ex->e_pblk += EXT_INIT_MAX_LEN;
+				ex->e_lblk += EXT_INIT_MAX_LEN;
+				ex->e_len -= EXT_INIT_MAX_LEN;
+				ex--;
+				i--;
+			}
+		}
+
+#ifdef DEBUG
+		printf("W: ino=%d pblk=%llu lblk=%llu len=%u\n", ino,
+				extent.e_pblk, extent.e_lblk, extent.e_len);
+#endif
+		retval = ext2fs_extent_insert(handle, EXT2_EXTENT_INSERT_AFTER,
+					      &extent);
+		if (retval)
+			goto err2;
+		retval = ext2fs_extent_fix_parents(handle);
+		if (retval)
+			goto err2;
+		ext_written++;
+	}
+
+	delta = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(&inode)) -
+		start_val;
+	if (delta)
+		quota_data_add(ctx->qctx, &inode, ino, delta << 9);
+
+#if defined(DEBUG) || defined(DEBUG_SUMMARY)
+	printf("rebuild: ino=%d extents=%d->%d\n", ino, list->ext_read,
+	       ext_written);
+#endif
+	e2fsck_write_inode(ctx, ino, EXT2_INODE(&inode), "rebuild_extents");
+
+err2:
+	ext2fs_extent_free(handle);
+err:
+	return retval;
+}
+
+errcode_t ext2fs_add_extents(e2fsck_t ctx, struct ext2fs_extent *extents,
+			     int count, ext2_ino_t ino)
+{
+	struct ext2_inode_large	inode;
+	errcode_t		retval;
+	ext2_extent_handle_t	handle;
+	unsigned int		i, ext_written;
+	struct ext2fs_extent	*ex, extent;
+	blk64_t			start_val, delta;
+	struct extent_list list = { 0 };
+
+	list.count = 0;
+	list.blocks_freed = 0;
+	list.ino = ino;
+	list.ext_read = 0;
+	list.size = NUM_EXTENTS;
+	retval = ext2fs_get_array(NUM_EXTENTS, sizeof(struct ext2fs_extent),
+				  &list.extents);
+	if (retval)
+		return retval;
+
+	e2fsck_read_inode_full(ctx, ino, EXT2_INODE(&inode), sizeof(inode),
+			       "rebuild_extents");
+
+	/* Skip deleted inodes and inline data files */
+	if (inode.i_links_count == 0 ||
+	    inode.i_flags & EXT4_INLINE_DATA_FL)
+		return 0;
+
+	/* Collect lblk->pblk mappings */
+	if (!inode.i_flags & EXT4_EXTENTS_FL)
+		return -EINVAL;
+	retval = load_extents(ctx, &list);
+	if (retval)
+		return retval;
+	
+	if (list.count + count > list.size) {
+		unsigned int newsize;
+
+		newsize = (list.count + count) / NUM_EXTENTS;
+		newsize = (newsize + 1) * NUM_EXTENTS;
+
+		retval = ext2fs_resize_mem(0,
+				newsize * sizeof(struct ext2fs_extent),
+				&list.extents);
+		if (retval)
+			return retval;
+		list.size = newsize;
+	}
+	memcpy(list.extents + list.count, extents, sizeof(*extents) * count);
+	list.count += count;
+
+	return __rebuild_extent_tree(ctx, &list, ino);
+}
+
+errcode_t ext2fs_remove_extents(e2fsck_t ctx, struct ext2fs_extent *extents,
+				int count, ext2_ino_t ino)
+{
+	return 0;
+}
+
+
 static errcode_t rebuild_extent_tree(e2fsck_t ctx, struct extent_list *list,
 				     ext2_ino_t ino)
 {

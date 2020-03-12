@@ -479,11 +479,19 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 {
 	struct ext4_fc_commit_hdr *fc_hdr;
 	struct ext4_fc_tl *tl;
-	struct ext3_extent *fc_ext;
+	struct ext3_extent *ex;
 	ext2_extent_handle_t handle = 0;
-	int i, ret, ino;
-	struct ext2_inode_large inode;
+	int i, ret, ino, num_extents;
+	struct ext2_inode *inode;
 	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
+	struct ext2fs_extent extent, *extent_list;
+	int inode_len = EXT2_GOOD_OLD_INODE_SIZE;
+
+	if (EXT2_INODE_SIZE(ctx->fs->super)
+				> EXT2_GOOD_OLD_INODE_SIZE)
+		inode_len +=
+			ext2fs_le16_to_cpu(((struct ext2_inode_large *)
+				        (fc_hdr + 1))->i_extra_isize);
 
 	fprintf(stderr, "JOURNAL REPLAYING\n");
 	if (pass == PASS_SCAN)
@@ -507,44 +515,58 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 		return ret;
 
 	ino = le32_to_cpu(fc_hdr->fc_ino);
-
-	ret = ext2fs_extent_open(ctx->fs, ino, &handle);
-	if (ret)
-		return ret;
-
+	extent_list = NULL;
+	num_extents= 0;
 	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
 		i++, tl = NEXT_TL(tl)) {
 		switch(le16_to_cpu(tl->fc_tag)) {
 		case EXT4_FC_TAG_ADD_RANGE:
-			fc_ext = (struct ext3_extent *)(tl + 1);
-			ret = fc_add_range(journal, ino, fc_ext);
+			ex = (struct ext3_extent *)(tl + 1);
+			extent.e_pblk = ext2fs_le32_to_cpu(ex->ee_start) +
+				((__u64) ext2fs_le16_to_cpu(ex->ee_start_hi)
+					<< 32);
+			extent.e_lblk = ext2fs_le32_to_cpu(ex->ee_block);
+			extent.e_len = ext2fs_le16_to_cpu(ex->ee_len);
+			extent.e_flags |= EXT2_EXTENT_FLAGS_LEAF;
+			if (extent.e_len > EXT_INIT_MAX_LEN) {
+				extent.e_len -= EXT_INIT_MAX_LEN;
+				extent.e_flags |= EXT2_EXTENT_FLAGS_UNINIT;
+			}
+			/* TODO: use ext2fs alloc / reallocs */
+			extent_list = reallocarray(extent_list, num_extents,
+					sizeof(struct ext2fs_extent));
+			if (!extent_list)
+				return -ENOMEM;
+			extent_list[num_extents - 1] = extent;
 			break;
 		default:
 			break;
 		}
 	}
 
-	ext2fs_extent_free(handle);
-
-	ret = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)&inode,
-				     sizeof(struct ext2_inode_large));
+	ret = ext2fs_add_extents(ctx, extent_list, num_extents, ino);
 	if (ret)
 		return ret;
 
-	if (inode.i_flags & EXT4_INLINE_DATA_FL) {
-		memcpy(&inode, fc_hdr + 1, sizeof(struct ext2_inode_large));
+	inode = (struct ext2_inode *)malloc(inode_len);
+	if (!inode)
+		return -ENOMEM;
+	ret = ext2fs_read_inode_full(ctx->fs, ino, inode, inode_len);
+	if (ret)
+		return ret;
+
+	if (inode->i_flags & EXT4_INLINE_DATA_FL) {
+		memcpy(inode, fc_hdr + 1, inode_len);
 	} else {
-		memcpy(&inode, fc_hdr + 1,
+		memcpy(inode, fc_hdr + 1,
 			offsetof(struct ext2_inode_large, i_block));
-		memcpy(&inode.i_generation,
+		memcpy(&inode->i_generation,
 		       &((struct ext2_inode_large *)(fc_hdr + 1))->i_generation,
-		       sizeof(struct ext2_inode_large) -
+		       inode_len -
 		       offsetof(struct ext2_inode_large, i_generation));
 	}
 
-	ret = ext2fs_write_inode_full(ctx->fs, ino,
-		(struct ext2_inode *)&inode,
-		sizeof(struct ext2_inode_large));
+	ret = ext2fs_write_inode_full(ctx->fs, ino, inode, inode_len);
 	if (ret)
 		return ret;
 
@@ -552,6 +574,8 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	ext2fs_write_block_bitmap(ctx->fs);
 	ext2fs_write_inode_bitmap(ctx->fs);
 	ext2fs_set_gdt_csum(ctx->fs);
+	ext2fs_flush(ctx->fs);
+
 	return ret;
 }
 
