@@ -21,9 +21,6 @@
 #include <linux/blkdev.h>
 #endif
 
-#undef jbd_debug
-#define jbd_debug(__num, ...) fprintf(stderr, __VA_ARGS__)
-
 /*
  * Maintain information about the progress of the recovery job, so that
  * the different passes can carry information between them.
@@ -575,9 +572,6 @@ static int do_one_pass(journal_t *journal,
 			if (descr_csum_size > 0 &&
 			    !jbd2_descriptor_block_csum_verify(journal,
 							       bh->b_data)) {
-				printk(KERN_ERR "JBD2: Invalid checksum "
-				       "recovering block %lu in log\n",
-				       next_log_block);
 				err = -EFSBADCRC;
 				brelse(bh);
 				goto failed;

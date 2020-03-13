@@ -425,7 +425,6 @@ static int fc_replay_dentries(journal_t *j,
 		dname = strndup(fcd->fc_dname, fc_tag_len(tl) -
 				sizeof(struct ext4_fc_dentry_info));
 		if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_ADD_DENTRY) {
-			fprintf(stderr, "Add dentry\n");
 			ret = ext2fs_link(fs, parent_ino, dname, ino,
 					  EXT2_FT_REG_FILE);
 			ext2fs_free_mem(dname);
@@ -435,7 +434,6 @@ static int fc_replay_dentries(journal_t *j,
 				fs->inode_map, ino);
 			ext2fs_mark_ib_dirty(fs);
 		} else if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_DEL_DENTRY) {
-			fprintf(stderr, "Rm dentry\n");
 			ret = ext4_fc_handle_unlink(fs, parent_ino, dname, ino);
 			ext2fs_free_mem(dname);
 			if (ret)
@@ -581,7 +579,6 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	struct extent_list extent_list = {0};
 	int inode_len;
 
-	fprintf(stderr, "JOURNAL REPLAYING\n");
 	if (pass == PASS_SCAN)
 		return ext4_journal_fc_replay_scan(journal, bh, off);
 	else if (pass != PASS_REPLAY)
@@ -656,7 +653,6 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	if (ret)
 		return ret;
 
-	fprintf(stderr, "FIXING blockcount problem\n");
 	ext2fs_write_block_bitmap(ctx->fs);
 	ext2fs_write_inode_bitmap(ctx->fs);
 	ext2fs_set_gdt_csum(ctx->fs);
@@ -1080,12 +1076,10 @@ static errcode_t e2fsck_journal_load(journal_t *journal)
 	journal->j_tail = ntohl(jsb->s_start);
 	journal->j_first = ntohl(jsb->s_first);
 	if (jbd2_has_feature_fast_commit(journal)) {
-		fprintf(stderr, "fast commit is on!!\n");
 		journal->j_last_fc = ntohl(jsb->s_maxlen);
 		journal->j_last = journal->j_last_fc - JFS_FAST_COMMIT_BLOCKS;
 		journal->j_first_fc = journal->j_last + 1;
 	} else {
-		fprintf(stderr, "fast commit is off!!\n");
 		journal->j_last = ntohl(jsb->s_maxlen);
 	}
 
@@ -1350,13 +1344,9 @@ static errcode_t recover_ext3_journal(e2fsck_t ctx)
 	if (retval)
 		goto errout;
 
-	fprintf(stderr, "Trying journal recovery\n");
 	retval = -jbd2_journal_recover(journal);
-	if (retval) {
-		fprintf(stderr, "Journalb recovery failed\n");
+	if (retval)
 		goto errout;
-	}
-	fprintf(stderr, "Journal recovery ok\n");
 
 	if (journal->j_failed_commit) {
 		pctx.ino = journal->j_failed_commit;
@@ -1389,13 +1379,10 @@ errcode_t e2fsck_run_ext3_journal(e2fsck_t ctx)
 		       ctx->device_name);
 		return EXT2_ET_FILE_RO;
 	}
-	fprintf(stderr, "HELLO\n");
 	if (ctx->fs->flags & EXT2_FLAG_DIRTY)
 		ext2fs_flush(ctx->fs);	/* Force out any modifications */
 
-	fprintf(stderr, "Trying recovery\n");
 	recover_retval = recover_ext3_journal(ctx);
-	fprintf(stderr, "Ret - %d\n", recover_retval);
 
 	/*
 	 * Reload the filesystem context to get up-to-date data from disk
