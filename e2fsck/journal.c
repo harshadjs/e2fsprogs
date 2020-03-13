@@ -401,6 +401,33 @@ static __u8 *fc_tag_val(struct ext4_fc_tl *tl)
 	return (__u8 *)tl + sizeof(*tl);
 }
 
+static int ext4_fc_handle_unlink(ext2_filsys fs, int parent_ino,
+				 const char *dname, int ino)
+{
+	struct ext2_inode inode;
+	int ret;
+
+	ret = ext2fs_unlink(fs, parent_ino, dname, ino, 0);
+	if (ret)
+		return ret;
+
+	ret = ext2fs_read_inode(fs, ino, &inode);
+	if (ret)
+		return ret;
+
+	if (inode.i_links_count > 1) {
+		inode.i_links_count--;
+		ret = ext2fs_write_inode(fs, ino, &inode);
+		if (ret)
+			return ret;
+	} else {
+		ext2fs_unmark_inode_bitmap2(fs->inode_map, ino);
+		ext2fs_mark_ib_dirty(fs);
+	}
+
+	return 0;
+}
+
 static int fc_replay_dentries(journal_t *j,
 			struct ext4_fc_commit_hdr *fc_hdr)
 {
@@ -428,6 +455,7 @@ static int fc_replay_dentries(journal_t *j,
 		dname = strndup(fcd->fc_dname, fc_tag_len(tl) -
 				sizeof(struct ext4_fc_dentry_info));
 		if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_ADD_DENTRY) {
+			fprintf(stderr, "Add dentry\n");
 			ret = ext2fs_link(fs, parent_ino, dname, ino,
 					  EXT2_FT_REG_FILE);
 			free(dname);
@@ -437,8 +465,15 @@ static int fc_replay_dentries(journal_t *j,
 				fs->inode_map, ino);
 			ext2fs_mark_ib_dirty(fs);
 		} else if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_DEL_DENTRY) {
+			fprintf(stderr, "Rm dentry\n");
+			ret = ext4_fc_handle_unlink(fs, parent_ino, dname, ino);
+			free(dname);
+			if (ret)
+				return ret;
 		} else if (le16_to_cpu(tl->fc_tag) ==
 			    EXT4_FC_TAG_CREAT_DENTRY) {
+			jbd_debug(1, "Create dentry\n");
+
 			ext2fs_mark_inode_bitmap2(fs->inode_map, ino);
 			ret = ext2fs_link(fs, parent_ino, dname, ino,
 					  EXT2_FT_REG_FILE);
@@ -474,6 +509,102 @@ static int fc_replay_dentries(journal_t *j,
 	return 0;
 }
 
+static int ext2fs_add_extent_to_list(struct extent_list *list,
+					struct ext2fs_extent *ex)
+{
+	int ret;
+
+	jbd_debug(1, "Adding extent\n");
+
+	if (list->count == list->size) {
+		unsigned int new_size = (list->size + NUM_EXTENTS) *
+					sizeof(struct ext2fs_extent);
+		ret = ext2fs_resize_mem(0, new_size, &list->extents);
+		if (ret)
+			return ret;
+		list->size += NUM_EXTENTS;
+	}
+
+	memcpy(list->extents + list->count, ex, sizeof(*ex));
+	list->count++;
+	return 0;
+}
+
+static int ext2fs_del_extent_from_list(struct extent_list *list,
+				       struct ext2fs_extent *ex)
+{
+	struct ext2fs_extent *iter, extent;
+	int ret, i, j;
+
+	jbd_debug(1, "Deleting extent\n");
+
+	i = 0;
+	while (i < list->count) {
+		int iter_start_overlap = 0, iter_end_overlap = 0;
+
+		iter = &list->extents[i];
+		if (ex->e_lblk >= iter->e_lblk &&
+			ex->e_lblk <= iter->e_lblk + iter->e_len) {
+			if (ex->e_lblk + ex->e_len <
+				iter->e_lblk + iter->e_len) {
+				extent.e_lblk = ex->e_lblk + ex->e_len;
+				extent.e_len = iter->e_lblk + iter->e_len -
+					ex->e_lblk - ex->e_len;
+				extent.e_pblk = ex->e_pblk + ex->e_len;
+				extent.e_flags = iter->e_flags;
+				ret = ext2fs_add_extent_to_list(list, &extent);
+				if (ret)
+					return ret;
+				iter = &list->extents[i];
+			}
+			iter->e_len = ex->e_lblk - iter->e_lblk;
+		}
+
+		if (ex->e_lblk + ex->e_len >= iter->e_lblk &&
+			ex->e_lblk + ex->e_len <= iter->e_lblk + iter->e_len) {
+			if (ex->e_lblk > iter->e_lblk) {
+				extent.e_lblk = iter->e_lblk;
+				extent.e_len = 	ex->e_lblk - iter->e_lblk;
+				extent.e_pblk = iter->e_pblk;
+				extent.e_flags = iter->e_flags;
+				ret = ext2fs_add_extent_to_list(list, &extent);
+				if (ret)
+					return ret;
+				iter = &list->extents[i];
+			}
+			iter->e_len = ex->e_lblk - iter->e_lblk;
+		}
+		if (iter->e_len == 0) {
+			/* 
+			 * If this removal resulted in iter being of zero
+			 * length, remove it right away, and start the next
+			 * iteration at current index.
+			 */
+			for (j = i; j < list->count - 1; j++)
+				list->extents[j] = list->extents[j + 1];
+			list->count--;
+		} else {
+			i++;
+		}
+	}
+	return 0;
+}
+
+static void ext3_to_ext2fs_extent(struct ext2fs_extent *to,
+				  struct ext3_extent *from)
+{
+	to->e_pblk = ext2fs_le32_to_cpu(from->ee_start) +
+		((__u64) ext2fs_le16_to_cpu(from->ee_start_hi)
+			<< 32);
+	to->e_lblk = ext2fs_le32_to_cpu(from->ee_block);
+	to->e_len = ext2fs_le16_to_cpu(from->ee_len);
+	to->e_flags |= EXT2_EXTENT_FLAGS_LEAF;
+	if (to->e_len > EXT_INIT_MAX_LEN) {
+		to->e_len -= EXT_INIT_MAX_LEN;
+		to->e_flags |= EXT2_EXTENT_FLAGS_UNINIT;
+	}
+}
+
 static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 				     enum passtype pass, int off)
 {
@@ -484,7 +615,8 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	int i, ret, ino, num_extents;
 	struct ext2_inode *inode;
 	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
-	struct ext2fs_extent extent, *extent_list;
+	struct ext2fs_extent extent;
+	struct extent_list extent_list = {0};
 	int inode_len = EXT2_GOOD_OLD_INODE_SIZE;
 
 	if (EXT2_INODE_SIZE(ctx->fs->super)
@@ -515,36 +647,33 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 		return ret;
 
 	ino = le32_to_cpu(fc_hdr->fc_ino);
-	extent_list = NULL;
-	num_extents= 0;
+	extent_list.ino = ino;
+	ret = e2fsck_read_extents(ctx, &extent_list);
+	if (ret)
+		return ret;
 	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
 		i++, tl = NEXT_TL(tl)) {
 		switch(le16_to_cpu(tl->fc_tag)) {
 		case EXT4_FC_TAG_ADD_RANGE:
-			ex = (struct ext3_extent *)(tl + 1);
-			extent.e_pblk = ext2fs_le32_to_cpu(ex->ee_start) +
-				((__u64) ext2fs_le16_to_cpu(ex->ee_start_hi)
-					<< 32);
-			extent.e_lblk = ext2fs_le32_to_cpu(ex->ee_block);
-			extent.e_len = ext2fs_le16_to_cpu(ex->ee_len);
-			extent.e_flags |= EXT2_EXTENT_FLAGS_LEAF;
-			if (extent.e_len > EXT_INIT_MAX_LEN) {
-				extent.e_len -= EXT_INIT_MAX_LEN;
-				extent.e_flags |= EXT2_EXTENT_FLAGS_UNINIT;
-			}
-			/* TODO: use ext2fs alloc / reallocs */
-			extent_list = reallocarray(extent_list, num_extents,
-					sizeof(struct ext2fs_extent));
-			if (!extent_list)
-				return -ENOMEM;
-			extent_list[num_extents - 1] = extent;
+			ext3_to_ext2fs_extent(&extent,
+					      (struct ext3_extent *)(tl + 1));
+			ret = ext2fs_add_extent_to_list(&extent_list, &extent);
+			if (ret)
+				return ret;
 			break;
+		case EXT4_FC_TAG_DEL_RANGE:
+			ext3_to_ext2fs_extent(&extent,
+					      (struct ext3_extent *)(tl + 1));
+			ret = ext2fs_del_extent_from_list(&extent_list,
+							  &extent);
+			if (ret)
+				return ret;
 		default:
 			break;
 		}
 	}
 
-	ret = ext2fs_add_extents(ctx, extent_list, num_extents, ino);
+	ret = e2fsck_rewrite_extent_tree(ctx, &extent_list);
 	if (ret)
 		return ret;
 
