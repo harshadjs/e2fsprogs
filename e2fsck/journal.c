@@ -278,12 +278,6 @@ static int process_journal_block(ext2_filsys fs,
 	return 0;
 }
 
-#define FIRST_TL(__hdr)	(struct ext4_fc_tl *)((__hdr) + 1)
-#define NEXT_TL(__tl)	(struct ext4_fc_tl *)((__u8 *)(__tl) +		\
-				   le16_to_cpu((__tl)->fc_len) +	\
-				   sizeof(*(__tl)))
-#define NUM_TLS(__hdr)	le16_to_cpu((__hdr)->fc_num_tlvs)
-
 static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 				       int off)
 {
@@ -306,19 +300,19 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 		goto out_err;
 
 	if (le32_to_cpu(fc_hdr->fc_magic) != EXT4_FC_MAGIC) {
-		state->fc_replay_error = -ENOENT;
+		state->fc_replay_error = -EXT2_ET_BAD_MAGIC;
 		goto out_err;
 	}
 
 	if (off != state->fc_replay_expected_off) {
-		state->fc_replay_error = -EFSCORRUPTED;
+		state->fc_replay_error = -EXT2_ET_CORRUPT_JOURNAL_SB;
 		goto out_err;
 	}
 
 	state->fc_replay_expected_off++;
 
 	if (le16_to_cpu(fc_hdr->fc_features)) {
-		state->fc_replay_error = -EOPNOTSUPP;
+		state->fc_replay_error = -EXT2_ET_OP_NOT_SUPPORTED;
 		goto out_err;
 	}
 
@@ -328,7 +322,7 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 	fc_hdr->fc_csum = old_csum;
 
 	if (csum != le32_to_cpu(fc_hdr->fc_csum)) {
-		state->fc_replay_error = -EFSBADCRC;
+		state->fc_replay_error = -EXT2_ET_BAD_CRC;
 		goto out_err;
 	}
 
@@ -336,57 +330,6 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 
 out_err:
 	return state->fc_replay_error;
-}
-
-#ifdef notyet
-static unused()
-{
-		if (parent_ino != 0) {
-		ret = ext2fs_new_inode(ctx->fs, parent_ino, 0, 0, &ino);
-		if (ret)
-			return ret;
-		ret = ext2fs_link(ctx->fs, parent_ino, dname, ino, EXT2_FT_REG_FILE);
-		if (ret)
-			return ret;
-		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, ino);
-		ext2fs_mark_ib_dirty(ctx->fs);
-	} else {
-		ino = ext2fs_le32_to_cpu(fc_hdr->fc_ino);
-	}
-
-
-}
-#endif
-
-static int fc_add_range(journal_t *journal, int ino, struct ext3_extent *ex)
-{
-#ifdef notyet
-	struct ext2fs_extent newex;
-	__u16 fc_ext_len;
-	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
-
-
-	memset(&newex, 0, sizeof(newex));
-	newex.e_lblk = ext2fs_le32_to_cpu(fc_ext->ee_block);
-	newex.e_pblk = ext2fs_le32_to_cpu(fc_ext->ee_start) |
-		(ext2fs_le16_to_cpu(fc_ext->ee_start_hi) << 31);
-	fc_ext_len = ext2fs_le16_to_cpu(fc_ext->ee_len);
-	if (fc_ext_len > EXT_INIT_MAX_LEN)
-		newex.e_len = fc_ext_len - EXT_INIT_MAX_LEN;
-	else
-		newex.e_len = fc_ext_len;
-	newex.e_flags = fc_ext_len >= EXT_INIT_MAX_LEN ?
-			EXT2_EXTENT_FLAGS_UNINIT : 0;
-
-	for (j = 0; j < newex.e_len & (EXT_INIT_MAX_LEN - 1);
-		j++) {
-		ext2fs_extent_set_bmap(handle, newex.e_lblk + j,
-			newex.e_pblk + j, newex.e_flags);
-		ext2fs_mark_block_bitmap2(ctx->fs->block_map,
-			newex.e_pblk + j);
-	}
-	ext2fs_mark_bb_dirty(ctx->fs);
-#endif
 }
 
 /* Get length of a particular tlv */
@@ -428,25 +371,52 @@ static int ext4_fc_handle_unlink(ext2_filsys fs, int parent_ino,
 	return 0;
 }
 
+static inline int get_fc_hdr_inode_len(ext2_filsys fs,
+				       struct ext4_fc_commit_hdr *fc_hdr)
+{
+	int inode_len = EXT2_GOOD_OLD_INODE_SIZE;
+
+	if (EXT2_INODE_SIZE(fs->super)
+			> EXT2_GOOD_OLD_INODE_SIZE)
+		inode_len +=
+			ext2fs_le16_to_cpu(((struct ext2_inode_large *)
+				(fc_hdr + 1))->i_extra_isize);
+	return inode_len;
+}
+
+static inline struct ext4_fc_tl *get_first_tl(ext2_filsys fs,
+					      struct ext4_fc_commit_hdr *fc_hdr)
+{
+	return (struct ext4_fc_tl *)((__u8 *)fc_hdr +
+				   sizeof(struct ext4_fc_commit_hdr) +
+				   get_fc_hdr_inode_len(fs, fc_hdr));
+}
+
+static inline struct ext4_fc_tl *get_next_tl(struct ext4_fc_tl *tl)
+{
+	return (struct ext4_fc_tl *)((__u8 *)tl +
+					le16_to_cpu(tl->fc_len) +
+					sizeof(*tl));	
+}
+
+static inline int num_tls(struct ext4_fc_commit_hdr *fc_hdr)
+{
+	return le16_to_cpu(fc_hdr->fc_num_tlvs);
+}
+
 static int fc_replay_dentries(journal_t *j,
 			struct ext4_fc_commit_hdr *fc_hdr)
 {
-	int inode_len = EXT2_GOOD_OLD_INODE_SIZE, ret, i;
+	int inode_len, ret, i;
 	struct ext4_fc_dentry_info *fcd;
-	 ext2_filsys fs = j->j_fs_dev->k_ctx->fs;
+	ext2_filsys fs = j->j_fs_dev->k_ctx->fs;
 	struct ext2_inode *inode;
 	struct ext4_fc_tl *tl;
 	int parent_ino, ino;
 	char *dname;
 
-	if (EXT2_INODE_SIZE(fs->super)
-				> EXT2_GOOD_OLD_INODE_SIZE)
-		inode_len +=
-			ext2fs_le16_to_cpu(((struct ext2_inode_large *)
-				        (fc_hdr + 1))->i_extra_isize);
-	tl = (struct ext4_fc_tl *)((__u8 *)fc_hdr +
-				   sizeof(struct ext4_fc_commit_hdr) +
-				   inode_len);
+	inode_len = get_fc_hdr_inode_len(fs, fc_hdr);
+	tl = get_first_tl(fs, fc_hdr);
 	for (i = 0; i < le16_to_cpu(fc_hdr->fc_num_tlvs); i++) {
 		fcd = (struct ext4_fc_dentry_info *)fc_tag_val(tl);
 
@@ -458,7 +428,7 @@ static int fc_replay_dentries(journal_t *j,
 			fprintf(stderr, "Add dentry\n");
 			ret = ext2fs_link(fs, parent_ino, dname, ino,
 					  EXT2_FT_REG_FILE);
-			free(dname);
+			ext2fs_free_mem(dname);
 			if (ret)
 				return ret;
 			ext2fs_mark_inode_bitmap2(
@@ -467,28 +437,26 @@ static int fc_replay_dentries(journal_t *j,
 		} else if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_DEL_DENTRY) {
 			fprintf(stderr, "Rm dentry\n");
 			ret = ext4_fc_handle_unlink(fs, parent_ino, dname, ino);
-			free(dname);
+			ext2fs_free_mem(dname);
 			if (ret)
 				return ret;
 		} else if (le16_to_cpu(tl->fc_tag) ==
-			    EXT4_FC_TAG_CREAT_DENTRY) {
-			jbd_debug(1, "Create dentry\n");
-
+				EXT4_FC_TAG_CREAT_DENTRY) {
 			ext2fs_mark_inode_bitmap2(fs->inode_map, ino);
 			ret = ext2fs_link(fs, parent_ino, dname, ino,
 					  EXT2_FT_REG_FILE);
 			if (ret) {
-				free(dname);
+				ext2fs_free_mem(dname);
 				return ret;
 			}
-			free(dname);
+			ext2fs_free_mem(dname);
 
-			inode = (struct ext2_inode *)malloc(inode_len);
-			if (!inode)
-				return -ENOMEM;
+			ret = ext2fs_get_mem(inode_len, &inode);
+			if (ret)
+				return ret;
 			ret = ext2fs_read_inode_full(fs, ino, inode, inode_len);
 			if (ret) {
-				free(inode);
+				ext2fs_free_mem(inode);
 				return ret;
 			}
 			memcpy(inode, (struct ext2_inode *)(fc_hdr + 1),
@@ -496,15 +464,13 @@ static int fc_replay_dentries(journal_t *j,
 			ret = ext2fs_write_inode_full(fs, ino, inode,
 						      inode_len);
 			if (ret) {
-				free(inode);
+				ext2fs_free_mem(inode);
 				return ret;
 			}
-			free(inode);
+			ext2fs_free_mem(inode);
 			ext2fs_mark_ib_dirty(fs);
 		}
-		tl = (struct ext4_fc_tl *)((__u8 *)tl +
-					   le16_to_cpu(tl->fc_len) +
-					   sizeof(*tl));
+		tl = get_next_tl(tl);
 	}
 	return 0;
 }
@@ -513,8 +479,6 @@ static int ext2fs_add_extent_to_list(struct extent_list *list,
 					struct ext2fs_extent *ex)
 {
 	int ret;
-
-	jbd_debug(1, "Adding extent\n");
 
 	if (list->count == list->size) {
 		unsigned int new_size = (list->size + NUM_EXTENTS) *
@@ -535,8 +499,6 @@ static int ext2fs_del_extent_from_list(struct extent_list *list,
 {
 	struct ext2fs_extent *iter, extent;
 	int ret, i, j;
-
-	jbd_debug(1, "Deleting extent\n");
 
 	i = 0;
 	while (i < list->count) {
@@ -617,13 +579,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
 	struct ext2fs_extent extent;
 	struct extent_list extent_list = {0};
-	int inode_len = EXT2_GOOD_OLD_INODE_SIZE;
-
-	if (EXT2_INODE_SIZE(ctx->fs->super)
-				> EXT2_GOOD_OLD_INODE_SIZE)
-		inode_len +=
-			ext2fs_le16_to_cpu(((struct ext2_inode_large *)
-				        (fc_hdr + 1))->i_extra_isize);
+	int inode_len;
 
 	fprintf(stderr, "JOURNAL REPLAYING\n");
 	if (pass == PASS_SCAN)
@@ -638,6 +594,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 
 	fc_hdr = (struct ext4_fc_commit_hdr *)
 		  ((__u8 *)bh->b_data + sizeof(journal_header_t));
+	inode_len = get_fc_hdr_inode_len(ctx->fs, fc_hdr);
 	ret = fc_replay_dentries(journal, fc_hdr);
 	if (ret)
 		return ret;
@@ -651,8 +608,8 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	ret = e2fsck_read_extents(ctx, &extent_list);
 	if (ret)
 		return ret;
-	for (tl = FIRST_TL(fc_hdr), i = 0; i < NUM_TLS(fc_hdr);
-		i++, tl = NEXT_TL(tl)) {
+	for (tl = get_first_tl(ctx->fs, fc_hdr), i = 0;
+		i < num_tls(fc_hdr); i++, tl = get_next_tl(tl)) {
 		switch(le16_to_cpu(tl->fc_tag)) {
 		case EXT4_FC_TAG_ADD_RANGE:
 			ext3_to_ext2fs_extent(&extent,
@@ -677,9 +634,9 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	if (ret)
 		return ret;
 
-	inode = (struct ext2_inode *)malloc(inode_len);
-	if (!inode)
-		return -ENOMEM;
+	ret = ext2fs_get_mem(inode_len, &inode);
+	if (ret)
+		return ret;
 	ret = ext2fs_read_inode_full(ctx->fs, ino, inode, inode_len);
 	if (ret)
 		return ret;

@@ -195,7 +195,7 @@ static int find_blocks(ext2_filsys fs, blk64_t *blocknr, e2_blkcnt_t blockcnt,
 	return 0;
 }
 
- errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list)
+errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list)
 {
 	struct ext2_inode_large	inode;
 	errcode_t		retval;
@@ -214,13 +214,13 @@ static int find_blocks(ext2_filsys fs, blk64_t *blocknr, e2_blkcnt_t blockcnt,
 	retval = ext2fs_iblk_sub_blocks(ctx->fs, EXT2_INODE(&inode),
 					list->blocks_freed);
 	if (retval)
-		goto err;
+		return retval;
 
 	/* Now stuff extents into the file */
 	retval = ext2fs_extent_open2(ctx->fs, list->ino, EXT2_INODE(&inode),
 					&handle);
 	if (retval)
-		goto err;
+		return retval;
 
 	ext_written = 0;
 	start_val = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(&inode));
@@ -254,10 +254,10 @@ static int find_blocks(ext2_filsys fs, blk64_t *blocknr, e2_blkcnt_t blockcnt,
 		retval = ext2fs_extent_insert(handle, EXT2_EXTENT_INSERT_AFTER,
 					      &extent);
 		if (retval)
-			goto err2;
+			goto err;
 		retval = ext2fs_extent_fix_parents(handle);
 		if (retval)
-			goto err2;
+			goto err;
 		ext_written++;
 	}
 
@@ -273,9 +273,8 @@ static int find_blocks(ext2_filsys fs, blk64_t *blocknr, e2_blkcnt_t blockcnt,
 	e2fsck_write_inode(ctx, list->ino, EXT2_INODE(&inode),
 				"rebuild_extents");
 
-err2:
-	ext2fs_extent_free(handle);
 err:
+	ext2fs_extent_free(handle);
 	return retval;
 }
 
@@ -316,10 +315,11 @@ static errcode_t rebuild_extent_tree(e2fsck_t ctx, struct extent_list *list,
 {
 	struct ext2_inode_large	inode;
 	errcode_t		retval;
-	ext2_extent_handle_t	handle;
+        ext2_extent_handle_t	handle;
 	unsigned int		i, ext_written;
 	struct ext2fs_extent	*ex, extent;
 	blk64_t			start_val, delta;
+
 
 	list->count = 0;
 	list->blocks_freed = 0;
