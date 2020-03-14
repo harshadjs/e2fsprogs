@@ -481,8 +481,6 @@ static int ext2fs_add_extent_to_list(struct extent_list *list,
 	int ret;
 	int i;
 
-	fprintf(stderr, "Adding %d-%d extent\n", ex->e_lblk, ex->e_len);
-
 	if (list->count == list->size) {
 		unsigned int new_size = (list->size + NUM_EXTENTS) *
 					sizeof(struct ext2fs_extent);
@@ -561,7 +559,6 @@ static void ext3_to_ext2fs_extent(struct ext2fs_extent *to,
 	to->e_pblk = ext2fs_le32_to_cpu(from->ee_start) +
 		((__u64) ext2fs_le16_to_cpu(from->ee_start_hi)
 			<< 32);
-	fprintf(stderr, "ee_block = %lx\n", from->ee_block);
 	to->e_lblk = ext2fs_le32_to_cpu(from->ee_block);
 	to->e_len = ext2fs_le16_to_cpu(from->ee_len);
 	to->e_flags |= EXT2_EXTENT_FLAGS_LEAF;
@@ -606,6 +603,28 @@ static void sort_and_merge_extents(struct extent_list *list)
 		for (j = i + 1; j < list->count - 1; j++)
 			list->extents[j] = list->extents[j + 1];
 		list->count--;
+	}
+}
+
+static void mark_blocks_used(ext2_filsys fs, blk64_t pblk, int count)
+{
+	int i = 0;
+
+	for (i = 0; i < count; i++) {
+		if (ext2fs_test_block_bitmap2(fs->block_map, pblk + i))
+			continue;
+		ext2fs_mark_block_bitmap2(fs->block_map, pblk + i);
+	}
+}
+
+static void mark_blocks_free(ext2_filsys fs, blk64_t pblk, int count)
+{
+	int i = 0;
+
+	for (i = 0; i < count; i++) {
+		if (!ext2fs_test_block_bitmap2(fs->block_map, pblk + i))
+			continue;
+		ext2fs_unmark_block_bitmap2(fs->block_map, pblk + i);
 	}
 }
 
@@ -659,9 +678,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 			ret = ext2fs_add_extent_to_list(&extent_list, &extent);
 			if (ret)
 				return ret;
-			ext2fs_mark_block_bitmap_range2(ctx->fs->block_map,
-							extent.e_pblk,
-							extent.e_len);
+			mark_blocks_used(ctx->fs, extent.e_pblk,  extent.e_len);
 			break;
 		case EXT4_FC_TAG_DEL_RANGE:
 			ext3_to_ext2fs_extent(&extent,
@@ -680,9 +697,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 							  &extent);
 			if (ret)
 				return ret;
-
-			ext2fs_unmark_block_bitmap_range2(ctx->fs->block_map,
-							  pblk, extent.e_len);
+			mark_blocks_free(ctx->fs, pblk, extent.e_len);
 		default:
 			break;
 		}
@@ -718,6 +733,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	ext2fs_mark_super_dirty(ctx->fs);
 	ext2fs_write_block_bitmap(ctx->fs);
 	ext2fs_write_inode_bitmap(ctx->fs);
+	ext2fs_calculate_summary_stats(ctx->fs);
 	ext2fs_set_gdt_csum(ctx->fs);
 	ext2fs_flush(ctx->fs);
 

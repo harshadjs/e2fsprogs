@@ -13,7 +13,7 @@ OUT=$test_name.log
 $FSCK $FSCK_OPT -E journal_only -N test_filesys $TMPFILE 2>&1 | head -n 1000 | tail -n +2 > $OUT
 echo "Exit status is $?" >> $OUT
 
-$DEBUGFS -f $CMDS $TMPFILE >> $OUT
+$DEBUGFS -f $CMDS $TMPFILE >> $OUT 2>/dev/null
 
 # Figure out what happened
 if cmp -s $EXP $OUT; then
