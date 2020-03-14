@@ -2,21 +2,24 @@
 
 FSCK_OPT=-fy
 IMAGE=$test_dir/image.gz
+CMDS=$test_dir/commands
 
 gunzip < $IMAGE > $TMPFILE
 
 # Run fsck to fix things?
-EXP1=$test_dir/expect.1
-OUT1=$test_name.1.log
+EXP=$test_dir/expect
+OUT=$test_name.log
 
-$FSCK $FSCK_OPT -N test_filesys $TMPFILE 2>&1 | head -n 1000 | tail -n +2 > $OUT1
-echo "Exit status is $?" >> $OUT1
+$FSCK $FSCK_OPT -E journal_only -N test_filesys $TMPFILE 2>&1 | head -n 1000 | tail -n +2 > $OUT
+echo "Exit status is $?" >> $OUT
+
+$DEBUGFS -f $CMDS $TMPFILE >> $OUT
 
 # Figure out what happened
-if cmp -s $EXP1 $OUT1; then
+if cmp -s $EXP $OUT; then
 	echo "$test_name: $test_description: ok"
 	touch $test_name.ok
 else
 	echo "$test_name: $test_description: failed"
-	diff -u $EXP1 $OUT1 >> $test_name.failed
+	diff -u $EXP $OUT >> $test_name.failed
 fi

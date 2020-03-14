@@ -281,6 +281,7 @@ err:
 errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list)
 {
 	struct ext2_inode_large inode;
+	int i;
 
 	e2fsck_read_inode_full(ctx, list->ino, EXT2_INODE(&inode),
 				sizeof(inode), "e2fsck_rewrite_extent_tree");
@@ -319,7 +320,7 @@ errcode_t e2fsck_read_extents(e2fsck_t ctx, struct extent_list *extents)
 		return 0;
 	retval = load_extents(ctx, extents);
 	if (retval) {
-		ext2fs_free_mem(extents->extents);
+		ext2fs_free_mem(&extents->extents);
 		return retval;
 	}
 	return 0;
