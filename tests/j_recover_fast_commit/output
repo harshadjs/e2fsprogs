@@ -1,9 +1,0 @@
-debugfs: ls
- 2  (12) .    2  (12) ..    11  (20) lost+found    12  (12) a    17  (956) b   
-debugfs: ls a/
- 12  (12) .    2  (12) ..    13  (12) bar    14  (12) no    15  (12) foo   
- 16  (952) trunc   
-debugfs: ex a/trunc
-Level Entries       Logical      Physical Length Flags
- 0/ 0   1/  1     0 -    39  1921 -  1960     40 
-debugfs: ex a/bar_new
