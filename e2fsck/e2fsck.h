@@ -229,8 +229,7 @@ typedef struct e2fsck_struct *e2fsck_t;
 struct e2fsck_fc_replay_state {
 	int fc_replay_error;
 	int fc_replay_expected_off;
-	int fc_replay_expected_tid;
-	int fc_replay_current_subtid;
+	int fc_num_blks;
 };
 
 struct e2fsck_struct {

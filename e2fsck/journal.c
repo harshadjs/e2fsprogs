@@ -325,7 +325,7 @@ static int ext4_journal_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 		state->fc_replay_error = -EXT2_ET_BAD_CRC;
 		goto out_err;
 	}
-
+	state->fc_num_blks++;
 	return 0;
 
 out_err:
@@ -647,6 +647,7 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 		return ext4_journal_fc_replay_scan(journal, bh, off);
 	else if (pass != PASS_REPLAY)
 		return 0;
+	ctx->fc_replay_state.fc_num_blks--;
 
 	if (ctx->fc_replay_state.fc_replay_error) {
 		jfs_debug("Scan phase detected error. Aborting replay..\n");
@@ -730,12 +731,15 @@ static int ext4_journal_fc_replay_cb(journal_t *journal, struct buffer_head *bh,
 	ret = ext2fs_write_inode_full(ctx->fs, ino, inode, inode_len);
 	if (ret)
 		return ret;
-	ext2fs_mark_super_dirty(ctx->fs);
-	ext2fs_write_block_bitmap(ctx->fs);
-	ext2fs_write_inode_bitmap(ctx->fs);
-	ext2fs_calculate_summary_stats(ctx->fs);
-	ext2fs_set_gdt_csum(ctx->fs);
-	ext2fs_flush(ctx->fs);
+	
+	if (ctx->fc_replay_state.fc_num_blks == 0) {
+		ext2fs_mark_super_dirty(ctx->fs);
+		ext2fs_write_block_bitmap(ctx->fs);
+		ext2fs_write_inode_bitmap(ctx->fs);
+		ext2fs_calculate_summary_stats(ctx->fs);
+		ext2fs_set_gdt_csum(ctx->fs);
+		ext2fs_flush(ctx->fs);
+	}
 
 	return ret;
 }
