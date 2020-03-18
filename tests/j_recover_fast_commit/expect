@@ -1,0 +1,23 @@
+test_filesys: recovering journal
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+Pass 4: Checking reference counts
+Pass 5: Checking group summary information
+test_filesys: 18/256 files (11.1% non-contiguous), 1198/2048 blocks
+Exit status is 0
+debugfs: ls
+ 2  (12) .    2  (12) ..    11  (20) lost+found    12  (12) a    17  (956) b   
+debugfs: ls a/
+ 12  (12) .    2  (12) ..    13  (24) bar    15  (12) foo    16  (16) trunc   
+ 19  (16) bar_new    13  (920) bar_link   
+debugfs: ex a/bar
+Level Entries       Logical      Physical Length Flags
+ 0/ 0   1/  2     0 -    15  2017 -  2032     16 
+ 0/ 0   2/  2    16 -    47  1603 -  1634     32 
+debugfs: ex a/trunc
+Level Entries       Logical      Physical Length Flags
+ 0/ 0   1/  1     0 -     0  1921 -  1921      1 
+debugfs: ex a/bar_new
+Level Entries       Logical      Physical Length Flags
+ 0/ 0   1/  1     0 -    39  1793 -  1832     40 

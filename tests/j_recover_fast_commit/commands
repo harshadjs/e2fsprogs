@@ -1,0 +1,5 @@
+ls
+ls a/
+ex a/bar
+ex a/trunc
+ex a/bar_new
