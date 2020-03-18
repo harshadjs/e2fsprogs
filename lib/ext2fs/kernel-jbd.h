@@ -74,6 +74,7 @@ extern void * __jbd_kmalloc (char *where, size_t size, int flags, int retry);
 	__jbd_kmalloc(__FUNCTION__, (size), (flags), 1)
 
 #define JBD2_MIN_JOURNAL_BLOCKS 1024
+#define JBD2_FAST_COMMIT_BLOCKS 128
 
 /*
  * Internal structures used by the logging mechanism:
@@ -94,6 +95,7 @@ extern void * __jbd_kmalloc (char *where, size_t size, int flags, int retry);
 #define JBD2_SUPERBLOCK_V1	3
 #define JBD2_SUPERBLOCK_V2	4
 #define JBD2_REVOKE_BLOCK	5
+#define JBD2_FC_BLOCK		6
 
 /*
  * Standard header for all descriptor blocks:
