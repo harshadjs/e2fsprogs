@@ -490,6 +490,52 @@ struct ext2_inode_large {
 /*9c*/	__u32   i_projid;       /* Project ID */
 };
 
+/* Fast commit stuff */
+/* Ext4 fast commit related info */
+
+/* Magic of fast commit header */
+#define EXT4_FC_MAGIC			0xE2540090
+
+struct ext4_fc_commit_hdr {
+	/* Fast commit magic, should be EXT4_FC_MAGIC */
+	__u32 fc_magic;
+	/* Features used by this fast commit block */
+	__u8 fc_features;
+	/* Number of TLVs in this fast commmit block */
+	__u16 fc_num_tlvs;
+	/* Inode number */
+	__u32 fc_ino;
+	/* Csum(hdr+contents) */
+	__u32 fc_csum;
+};
+
+struct ext4_fc_lrange {
+	__le32 fc_lblk;
+	__le32 fc_len;
+};
+
+#define EXT4_FC_TAG_ADD_RANGE		0x1
+#define EXT4_FC_TAG_DEL_RANGE		0x2
+#define EXT4_FC_TAG_CREAT_DENTRY	0x3
+#define EXT4_FC_TAG_ADD_DENTRY		0x4
+#define EXT4_FC_TAG_DEL_DENTRY		0x5
+
+struct ext4_fc_tl {
+	__le16 fc_tag;
+	__le16 fc_len;
+};
+
+/* On disk fast commit tlv value structure for dirent tags:
+ *  - EXT4_FC_TAG_CREATE_DENTRY
+ *  - EXT4_FC_TAG_ADD_DENTRY
+ *  - EXT4_FC_TAG_DEL_DENTRY
+ */
+struct ext4_fc_dentry_info {
+	__le32 fc_parent_ino;
+	__le32 fc_ino;
+	__u8 fc_dname[0];
+};
+
 #define EXT4_INODE_CSUM_HI_EXTRA_END	\
 	(offsetof(struct ext2_inode_large, i_checksum_hi) + sizeof(__u16) - \
 	 EXT2_GOOD_OLD_INODE_SIZE)
