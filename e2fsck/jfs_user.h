@@ -267,4 +267,13 @@ extern int	jbd2_journal_set_revoke(journal_t *, unsigned long long, tid_t);
 extern int	jbd2_journal_test_revoke(journal_t *, unsigned long long, tid_t);
 extern void	jbd2_journal_clear_revoke(journal_t *);
 
+/* Macros for kernel compatibility */
+#define be32_to_cpu(x)		ext2fs_be32_to_cpu(x)
+#define cpu_to_be32(x)		ext2fs_cpu_to_be32(x)
+#define cpu_to_be16(x)		ext2fs_cpu_to_be16(x)
+#define le16_to_cpu(x)		ext2fs_le16_to_cpu(x)
+#define le32_to_cpu(x)		ext2fs_le32_to_cpu(x)
+
+#define pr_warn(...)
+
 #endif /* _JFS_USER_H */
