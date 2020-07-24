@@ -584,6 +584,7 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 	unsigned int	count = 0;
 	int		total_free = 0;
 	int		group_free = 0;
+	int		last_allocated = 0;
 
 	/*
 	 * First calculate the block statistics
@@ -611,6 +612,7 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 	 */
 	group_free = 0;
 	total_free = 0;
+	last_allocated = 0;
 	count = 0;
 	group = 0;
 
@@ -619,14 +621,23 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 		if (!ext2fs_fast_test_inode_bitmap2(fs->inode_map, ino)) {
 			group_free++;
 			total_free++;
+		} else {
+			last_allocated = ino;
 		}
 		count++;
 		if ((count == fs->super->s_inodes_per_group) ||
 		    (ino == fs->super->s_inodes_count)) {
-			ext2fs_bg_free_inodes_count_set(fs, group++,
-							group_free);
+			if (last_allocated)
+				ext2fs_bg_itable_unused_set(fs, group,
+						fs->super->s_inodes_per_group - (last_allocated % fs->super->s_inodes_per_group)) ;
+			else
+				ext2fs_bg_itable_unused_set(fs, group,
+						0);
+			ext2fs_bg_free_inodes_count_set(fs, group, group_free);
+			group++;
 			count = 0;
 			group_free = 0;
+			last_allocated = 0;
 		}
 	}
 	fs->super->s_free_inodes_count = total_free;

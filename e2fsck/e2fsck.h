@@ -226,11 +226,7 @@ typedef struct e2fsck_struct *e2fsck_t;
 
 #define MAX_EXTENT_DEPTH_COUNT 5
 
-struct e2fsck_fc_replay_state {
-	int fc_replay_error;
-	int fc_replay_expected_off;
-	int fc_num_blks;
-};
+#include "ext2fs/fast_commit.h"
 
 struct e2fsck_struct {
 	ext2_filsys fs;

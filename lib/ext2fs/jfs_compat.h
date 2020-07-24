@@ -66,6 +66,9 @@ static inline __u32 jbd2_chksum(journal_t *j EXT2FS_ATTR((unused)),
 
 enum passtype {PASS_SCAN, PASS_REVOKE, PASS_REPLAY};
 
+#define JBD2_FC_REPLAY_STOP		0
+#define JBD2_FC_REPLAY_CONTINUE		1
+
 struct journal_s
 {
 	unsigned long		j_flags;
@@ -95,7 +98,8 @@ struct journal_s
 	__u32			j_csum_seed;
 	int (*j_fc_replay_callback)(struct journal_s *journal,
 				    struct buffer_head *bh,
-				    enum passtype pass, int off);
+				    enum passtype pass, int off,
+				    tid_t expected_tid);
 
 };
 
@@ -107,5 +111,7 @@ struct journal_s
 #ifdef NO_INLINE_FUNCS
 #define inline
 #endif
+
+#include "fast_commit.h"
 
 #endif /* _JFS_COMPAT_H */

@@ -21,6 +21,11 @@
 #include <linux/blkdev.h>
 #endif
 
+#undef jbd_debug
+#define jbd_debug(__i, ...) do {	\
+	fprintf(stderr, __VA_ARGS__);	\
+	fprintf(stderr, "\n");		\
+} while(0)
 /*
  * Maintain information about the progress of the recovery job, so that
  * the different passes can carry information between them.
@@ -239,10 +244,11 @@ static int fc_do_one_pass(journal_t *journal,
 	unsigned long next_fc_block;
 	struct buffer_head *bh;
 	unsigned int seq;
-	journal_header_t *jhdr;
 	int err = 0;
 
 	next_fc_block = journal->j_first_fc;
+	if (!journal->j_fc_replay_callback)
+		return 0;
 
 	while (next_fc_block <= journal->j_last_fc) {
 		jbd_debug(3, "Fast commit replay: next block %ld",
@@ -253,30 +259,21 @@ static int fc_do_one_pass(journal_t *journal,
 			break;
 		}
 
-		jhdr = (journal_header_t *)bh->b_data;
-		seq = be32_to_cpu(jhdr->h_sequence);
-		if (be32_to_cpu(jhdr->h_magic) != JBD2_MAGIC_NUMBER ||
-		    seq != expected_commit_id) {
-			jbd_debug(3, "Fast commit replay: magic / commitid error [%d / %d / %d]\n",
-				  be32_to_cpu(jhdr->h_magic), seq,
-				  expected_commit_id);
-			break;
-		}
 		jbd_debug(3, "Processing fast commit blk with seq %d",
 			  seq);
-		if (journal->j_fc_replay_callback) {
-			err = journal->j_fc_replay_callback(
-						journal, bh, pass,
-						next_fc_block -
-						journal->j_first_fc);
-			if (err)
-				break;
-		}
+		err = journal->j_fc_replay_callback(journal, bh, pass,
+					next_fc_block - journal->j_first_fc,
+					expected_commit_id);
 		next_fc_block++;
+		if (err < 0 || err == JBD2_FC_REPLAY_STOP)
+			break;
+		err = 0;
 	}
 
 	if (err)
 		jbd_debug(3, "Fast commit replay failed, err = %d\n", err);
+
+	printk(KERN_ERR "fc replay returned %d\n", err);
 
 	return err;
 }
@@ -816,10 +813,6 @@ static int do_one_pass(journal_t *journal,
 			brelse(bh);
 			if (err)
 				goto failed;
-			continue;
-		case JBD2_FC_BLOCK:
-			pr_warn("Unexpectedly found fast commit block.\n");
-			continue;
 
 		default:
 			jbd_debug(3, "Unrecognised magic %d, end of scan.\n",
