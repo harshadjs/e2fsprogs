@@ -247,7 +247,7 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 			}
 		}
 
-#ifdef DEBUG
+#ifndef DEBUG
 		printf("W: ino=%d pblk=%llu lblk=%llu len=%u\n", list->ino,
 				extent.e_pblk, extent.e_lblk, extent.e_len);
 #endif

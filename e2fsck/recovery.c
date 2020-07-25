@@ -275,7 +275,7 @@ static int fc_do_one_pass(journal_t *journal,
 
 	printk(KERN_ERR "fc replay returned %d\n", err);
 
-	return err;
+	return 0;
 }
 
 /**
