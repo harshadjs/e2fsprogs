@@ -225,6 +225,8 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 	ext_written = 0;
 	start_val = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(inode));
 	for (i = 0, ex = list->extents; i < list->count; i++, ex++) {
+		if (ex->e_len == 0)
+			continue;
 		memcpy(&extent, ex, sizeof(struct ext2fs_extent));
 		extent.e_flags &= EXT2_EXTENT_FLAGS_UNINIT;
 		if (extent.e_flags & EXT2_EXTENT_FLAGS_UNINIT) {

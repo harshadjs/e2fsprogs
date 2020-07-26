@@ -911,6 +911,8 @@ extern blk64_t ext2fs_inode_data_blocks2(ext2_filsys fs,
 					 struct ext2_inode *inode);
 extern blk64_t ext2fs_inode_i_blocks(ext2_filsys fs,
 				     struct ext2_inode *inode);
+void ext2fs_inode_set_i_blocks(ext2_filsys fs,
+					struct ext2_inode *inode, blk64_t blks);
 extern blk64_t ext2fs_get_stat_i_blocks(ext2_filsys fs,
 					struct ext2_inode *inode);
 extern blk64_t ext2fs_blocks_count(struct ext2_super_block *super);

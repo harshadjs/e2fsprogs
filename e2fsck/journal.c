@@ -616,6 +616,9 @@ static void mark_blocks_free(ext2_filsys fs, blk64_t pblk, int count)
 
 
 #define ex_end(__ex) ((__ex)->e_lblk + (__ex)->e_len - 1)
+#define ex_pend(__ex) ((__ex)->e_pblk + (__ex)->e_len - 1)
+
+#define max(__a, __b) ((__a) > (__b) ? (__a) : (__b))
 static int make_room(struct extent_list *list, int i)
 {
 	int ret;
@@ -704,15 +707,14 @@ static void sort_and_merge_extents(struct extent_list *list)
 
 	i = 0;
 	while (i < list->count - 1) {
-		if (list->extents[i].e_lblk + list->extents[i].e_len - 1 <
-			list->extents[i + 1].e_lblk) {
+		if (ex_end(&list->extents[i]) + 1 != list->extents[i + 1].e_lblk ||
+			ex_pend(&list->extents[i]) + 1 != list->extents[i + 1].e_pblk ||
+			list->extents[i].e_flags != list->extents[1 + 1].e_flags) {
 			i++;
 			continue;
 		}
-		ex_end = MAX(list->extents[i].e_lblk + list->extents[i].e_len,
-			     list->extents[i + 1].e_lblk +
-			     list->extents[i + 1].e_len) - 1;
-		list->extents[i].e_len = ex_end - list->extents[i].e_lblk + 1;
+
+		list->extents[i].e_len += list->extents[i + 1].e_len;
 		for (j = i + 1; j < list->count - 1; j++)
 			list->extents[j] = list->extents[j + 1];
 		list->count--;
@@ -758,6 +760,7 @@ static int ext4_fc_update_block_bitmaps(e2fsck_t ctx)
 		for (j = 0; j < list.count; j++)
 			mark_blocks_used(ctx->fs, list.extents[j].e_pblk,
 						list.extents[j].e_len);
+		printf("FREEING! 1\n");
 		ext2fs_free_mem(&list.extents);
 	}
 
@@ -781,21 +784,15 @@ static int ext2fs_add_extent_to_list(e2fsck_t ctx, struct extent_list *list,
 
 	ext4_fc_record_modified_inode(ctx, list->ino);
 	for (i = 0; i < list->count; i++) {
-
 		if (ex_end(&list->extents[i]) < add_ex.e_lblk)
 			continue;
-		/* Case 1: No overlap */
-		if (list->extents[i].e_lblk > ex_end(&add_ex)) {
-			if (del)
-				goto done;
-			ret = make_room(list, i);
-			if (ret)
-				return ret;
-			list->extents[i] = add_ex;
-			goto done;
-		}
+
 		mark_blocks_free(ctx->fs, list->extents[i].e_pblk,
 			list->extents[i].e_len);
+
+		/* Case 1: No overlap */
+		if (list->extents[i].e_lblk > ex_end(&add_ex))
+			break;
 
 		/* Case 2: Split */
 		if (list->extents[i].e_lblk < add_ex.e_lblk &&
@@ -803,71 +800,40 @@ static int ext2fs_add_extent_to_list(e2fsck_t ctx, struct extent_list *list,
 			ret = make_room(list, i + 1);
 			if (ret)
 				return ret;
-			list->extents[i + 1] = add_ex;
-			if (del)
-				list->extents[i + 1].e_len = 0;
-
-			ret = make_room(list, i + 2);
-			if (ret)
-				return ret;
-			list->extents[i + 2] = list->extents[i];
-			offset = add_ex.e_lblk + add_ex.e_len - list->extents[i].e_lblk;
-			list->extents[i + 2].e_lblk += offset;
-			list->extents[i + 2].e_pblk += offset;
-			list->extents[i + 2].e_len -= offset;
-
+			list->extents[i + 1] = list->extents[i];
+			offset = ex_end(&add_ex) + 1 - list->extents[i].e_lblk;
+			list->extents[i + 1].e_lblk += offset;
+			list->extents[i + 1].e_pblk += offset;
+			list->extents[i + 1].e_len -= offset;
 			list->extents[i].e_len =
 				add_ex.e_lblk - list->extents[i].e_lblk;
-			goto done;
+			break;
 		}
 		/* Case 3: Exact overlap */
 		if (add_ex.e_lblk <= list->extents[i].e_lblk  &&
 			ex_end(&list->extents[i]) <= ex_end(&add_ex)) {
 			list->extents[i].e_len = 0;
-			if (!del) {
-				make_room(list, i);
-				list->extents[i++] = add_ex;
-			}
 			continue;
 		}
 		/* Case 4: Partial overlap */
 		if (ex_end(&list->extents[i]) > ex_end(&add_ex)) {
-			offset = ex_end(&list->extents[i]) - ex_end(&add_ex);
+			offset = ex_end(&add_ex) + 1 - list->extents[i].e_lblk;
 			list->extents[i].e_lblk += offset;
 			list->extents[i].e_pblk += offset;
 			list->extents[i].e_len -= offset;
-			ret = make_room(list, i);
-			if (ret)
-				return ret;
-			list->extents[i] = add_ex;
-			if (del)
-				list->extents[i].e_len = 0;
-			goto done;
+			break;
 		}
 			
-		if (ex_end(&add_ex) > ex_end(&list->extents[i])) {
-			add_ex2 = add_ex;
-			add_ex2.e_len = ex_end(&list->extents[i]) - add_ex2.e_lblk;
-			offset =  ex_end(&add_ex2) + 1 - add_ex.e_lblk;
-			add_ex.e_lblk += offset;
-			add_ex.e_pblk += offset;
-			add_ex.e_len -= offset;
-			list->extents[i].e_len = add_ex.e_lblk - list->extents[i].e_lblk;
-			ret = make_room(list, i + 1);
-			if (ret)
-				return ret;
-			list->extents[i + 1] = add_ex2;
-			if (del)
-				list->extents[i + 1].e_len = 0;
-			if (add_ex.e_len == 0)
-				goto done;
-			i = i + 1;
+		if (ex_end(&add_ex) >= ex_end(&list->extents[i])) {
+			list->extents[i].e_len =
+				max(add_ex.e_lblk - list->extents[i].e_lblk , 0);
 		}
 	}
 	if (add_ex.e_len && !del) {
-		make_room(list, list->count);
-		list->extents[list->count] = add_ex;
+		make_room(list, list->count - 1);
+		list->extents[list->count - 1] = add_ex;
 	}
+	dump_extents("befre-sort", list);
 
 	sort_and_merge_extents(list);
 done:
@@ -980,6 +946,7 @@ static int ext4_fc_handle_unlink(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	ret = ext2fs_read_inode(ctx->fs, darg.ino, &inode);
 	if (ret)
 		goto out;
+
 	if (inode.i_links_count > 1) {
 		inode.i_links_count--;
 		jbd_debug(1, "inode %d, writing Link Count = %d\n", darg.ino, inode.i_links_count);
@@ -990,8 +957,8 @@ static int ext4_fc_handle_unlink(e2fsck_t ctx, struct ext4_fc_tl *tl)
 		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, darg.ino);
 		ext2fs_mark_ib_dirty(ctx->fs);
 	} else {
+		inode.i_links_count--;
 		jbd_debug(1, "2 inode %d, Link Count = %d\n", darg.ino, inode.i_links_count);
-		memset(&inode, 0, sizeof(inode));
 		ext2fs_write_inode(ctx->fs, darg.ino, &inode);
 		ext2fs_unmark_inode_bitmap2(ctx->fs->inode_map, darg.ino);
 		ext2fs_mark_ib_dirty(ctx->fs);
@@ -1043,8 +1010,10 @@ out:
 static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 {
 	struct ext4_fc_inode *fc_inode;
-	struct ext2_inode_large *inode = NULL;
+	struct ext2_inode_large *inode = NULL, *old_inode = NULL;
 	int ino, inode_len, ret;
+	struct e2fsck_fc_replay_state *state = &ctx->fc_replay_state;
+	struct extent_list *extent_list = state->fc_extent_list;
 
 	fc_inode = (struct ext4_fc_inode *)ext4_fc_tag_val(tl);
 	ino = le32_to_cpu(fc_inode->fc_ino);
@@ -1054,10 +1023,22 @@ static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	inode = malloc(inode_len);
 	if (!inode)
 		goto out;
+	old_inode = malloc(inode_len);
+	if (!old_inode)
+		goto out;
+
+	sort_and_merge_extents(extent_list);
+	e2fsck_rewrite_extent_tree(ctx, extent_list);
+	ext2fs_free_mem(&extent_list->extents);
+	extent_list->count = extent_list->size = extent_list->ino = 0;
+
+
+	jbd_debug(1, "Handling inode %d\n", ino);
 	ret = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)inode,
 					inode_len);
 	if (ret)
 		goto out;
+	memcpy(old_inode, inode, inode_len);
 
 	if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_INODE_FULL) {
 		memcpy(inode, fc_inode->fc_raw_inode, inode_len);
@@ -1069,11 +1050,22 @@ static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 		inode_len -
 		offsetof(struct ext2_inode_large,
 			i_generation));
+		ext2fs_inode_set_i_blocks(ctx->fs, inode,
+			ext2fs_inode_i_blocks(ctx->fs, old_inode));
+		inode->i_flags = old_inode->i_flags;
 	}
+	ext2fs_inode_csum_set(ctx->fs, ino, inode);
+
 	ret = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)inode, inode_len);
+	if (inode->i_links_count) {
+		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, ino);
+		ext2fs_mark_ib_dirty(ctx->fs);
+	}
 out:
 	if (inode)
 		free(inode);
+	if (old_inode)
+		free(old_inode);
 	return ret;
 
 }
@@ -1103,6 +1095,7 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 	struct ext2fs_extent extent;
 	struct ext2_inode inode_large;
 
+	jbd_debug(1, "CALLED\n");
 	if (pass == PASS_SCAN) {
 		state->fc_current_pass = PASS_SCAN;
 		return ext4_fc_replay_scan(journal, bh, off, expected_tid);
@@ -1111,18 +1104,22 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 	if (!state->fc_replay_num_tags) {
 		jbd_debug(1, "Replay stops\n");
 		if (state->fc_current_pass != pass)
-			return 0;
+			return JBD2_FC_REPLAY_STOP;
+		jbd_debug(1, "Step 0\n");
+
 		if (extent_list && extent_list->ino != 0) {
 			sort_and_merge_extents(extent_list);
-			ret = e2fsck_rewrite_extent_tree(ctx, extent_list);
-			if (ret)
-				return ret;
-			ext2fs_free_mem(state->fc_extent_list);
+			e2fsck_rewrite_extent_tree(ctx, extent_list);
+			ext2fs_free_mem(&extent_list->extents);
+			free(state->fc_extent_list);
 			state->fc_extent_list = NULL;
 		}
+		jbd_debug(1, "Step 1\n");
+
 		ret = ext4_fc_update_block_bitmaps(ctx);
 		if (ret)
 			return ret;
+		jbd_debug(1, "Step 2\n");
 		ext2fs_mark_super_dirty(ctx->fs);
 		ext2fs_write_block_bitmap(ctx->fs);
 		ext2fs_write_inode_bitmap(ctx->fs);
@@ -1130,7 +1127,7 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 		ext2fs_calculate_summary_stats(ctx->fs);
 		ext2fs_set_gdt_csum(ctx->fs);
 		ext2fs_flush(ctx->fs);
-		return 0;
+		return JBD2_FC_REPLAY_STOP;
 	}
 
 	if (state->fc_current_pass != pass) {
@@ -1175,19 +1172,18 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 			break;
 		case EXT4_FC_TAG_ADD_RANGE:
 			add_range = (struct ext4_fc_add_range *)ext4_fc_tag_val(tl);
-			if (extent_list->ino == 0) {
+			if (extent_list->ino != le32_to_cpu(add_range->fc_ino)) {
+				if (extent_list->ino != 0) {
+					sort_and_merge_extents(extent_list);
+					e2fsck_rewrite_extent_tree(ctx, extent_list);
+					ext2fs_free_mem(&extent_list->extents);
+					extent_list->count = extent_list->size = extent_list->ino = 0;
+
+				}
 				extent_list->ino = le32_to_cpu(add_range->fc_ino);
 				ret = e2fsck_read_extents(ctx, extent_list);
 				if (ret)
 					break;
-				sort_and_merge_extents(extent_list);
-			} else if (extent_list && extent_list->ino != 0) {
-				sort_and_merge_extents(extent_list);
-				ret = e2fsck_rewrite_extent_tree(ctx, extent_list);
-				if (ret)
-					return ret;
-				ext2fs_free_mem(state->fc_extent_list);
-				state->fc_extent_list = NULL;
 			}
 			extent_list->ino = le32_to_cpu(add_range->fc_ino);
 			jbd_debug(1, "Adding in %d\n", extent_list->ino);
@@ -1203,18 +1199,18 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 			del_range = (struct ext4_fc_del_range *)ext4_fc_tag_val(tl);
 			extent.e_lblk = ext2fs_le32_to_cpu(del_range->fc_lblk);
 			extent.e_len = ext2fs_le16_to_cpu(del_range->fc_len);
-			if (extent_list->ino == 0) {
+			if (extent_list->ino != le32_to_cpu(del_range->fc_ino)) {
+				if (extent_list->ino != 0) {
+					sort_and_merge_extents(extent_list);
+					dump_extents("Writing just before deleting for different inode", extent_list);
+					e2fsck_rewrite_extent_tree(ctx, extent_list);
+					ext2fs_free_mem(&extent_list->extents);
+					extent_list->count = extent_list->size = extent_list->ino = 0;
+				}
 				extent_list->ino = le32_to_cpu(del_range->fc_ino);
 				ret = e2fsck_read_extents(ctx, extent_list);
 				if (ret)
 					break;
-			} else if (extent_list && extent_list->ino != 0) {
-				sort_and_merge_extents(extent_list);
-				ret = e2fsck_rewrite_extent_tree(ctx, extent_list);
-				if (ret)
-					return ret;
-				ext2fs_free_mem(state->fc_extent_list);
-				state->fc_extent_list = NULL;
 			}
 			extent_list->ino = le32_to_cpu(del_range->fc_ino);
 			jbd_debug(1, "Del from %d\n", extent_list->ino);

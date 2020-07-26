@@ -168,10 +168,16 @@ errcode_t ext2fs_extent_header_verify(void *ptr, int size)
 	struct ext3_extent_header *eh = ptr;
 
 	dbg_show_header(eh);
-	if (ext2fs_le16_to_cpu(eh->eh_magic) != EXT3_EXT_MAGIC)
+	if (ext2fs_le16_to_cpu(eh->eh_magic) != EXT3_EXT_MAGIC) {
+			printf ("CASE 3\n");
+
 		return EXT2_ET_EXTENT_HEADER_BAD;
-	if (ext2fs_le16_to_cpu(eh->eh_entries) > ext2fs_le16_to_cpu(eh->eh_max))
+	}
+	if (ext2fs_le16_to_cpu(eh->eh_entries) > ext2fs_le16_to_cpu(eh->eh_max)) {
+			printf ("CASE 3\n");
+
 		return EXT2_ET_EXTENT_HEADER_BAD;
+	}
 	if (eh->eh_depth == 0)
 		entry_size = sizeof(struct ext3_extent);
 	else
@@ -181,8 +187,10 @@ errcode_t ext2fs_extent_header_verify(void *ptr, int size)
 	/* Allow two extent-sized items at the end of the block, for
 	 * ext4_extent_tail with checksum in the future. */
 	if ((ext2fs_le16_to_cpu(eh->eh_max) > eh_max) ||
-	    (ext2fs_le16_to_cpu(eh->eh_max) < (eh_max - 2)))
+	    (ext2fs_le16_to_cpu(eh->eh_max) < (eh_max - 2))) {
+		printf ("CASE 3\n");
 		return EXT2_ET_EXTENT_HEADER_BAD;
+	    }
 
 	return 0;
 }
