@@ -202,12 +202,13 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 	ext2_extent_handle_t	handle;
 	unsigned int		i, ext_written;
 	struct ext2fs_extent	*ex, extent;
-	blk64_t			start_val, delta;
+	blk64_t			start_val, delta, blkcount;
 
 	/* Reset extent tree */
 	inode->i_flags &= ~EXT4_EXTENTS_FL;
 	memset(inode->i_block, 0, sizeof(inode->i_block));
 
+	printf("reached %d\n", __LINE__);
 	/* Make a note of freed blocks */
 	quota_data_sub(ctx->qctx, inode, list->ino,
 		       list->blocks_freed * ctx->fs->blocksize);
@@ -215,15 +216,22 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 					list->blocks_freed);
 	if (retval)
 		return retval;
+	printf("reached %d\n", __LINE__);
 
 	/* Now stuff extents into the file */
 	retval = ext2fs_extent_open2(ctx->fs, list->ino, EXT2_INODE(inode),
 					&handle);
 	if (retval)
 		return retval;
+	printf("reached %d\n", __LINE__);
 
 	ext_written = 0;
+	ext2fs_iblk_set(ctx->fs, EXT2_INODE(inode), 0);
+
 	start_val = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(inode));
+	printf("start_val = %d\n", start_val);
+
+
 	for (i = 0, ex = list->extents; i < list->count; i++, ex++) {
 		if (ex->e_len == 0)
 			continue;
@@ -265,8 +273,15 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 
 	delta = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(inode)) -
 		start_val;
+	printf("delta = %d\n", delta);
+
 	if (delta)
 		quota_data_add(ctx->qctx, inode, list->ino, delta << 9);
+	if (!ext_written)
+		blkcount = 0;
+	else
+		blkcount = 128;
+	ext2fs_iblk_set(ctx->fs, EXT2_INODE(inode), blkcount / 8);
 
 #if defined(DEBUG) || defined(DEBUG_SUMMARY)
 	printf("rebuild: ino=%d extents=%d->%d\n", ino, list->ext_read,

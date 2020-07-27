@@ -1050,8 +1050,7 @@ static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 		inode_len -
 		offsetof(struct ext2_inode_large,
 			i_generation));
-		ext2fs_inode_set_i_blocks(ctx->fs, inode,
-			ext2fs_inode_i_blocks(ctx->fs, old_inode));
+		ext2fs_iblk_set(ctx->fs, inode, ext2fs_count_blocks(ctx->fs, ino, inode));
 		inode->i_flags = old_inode->i_flags;
 	}
 	ext2fs_inode_csum_set(ctx->fs, ino, inode);
