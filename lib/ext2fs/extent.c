@@ -1817,7 +1817,8 @@ blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *i
 	if (errcode)
 		goto out;
 	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
-	blkcount = extent_prev.e_len;
+	if (!(extent_prev.e_flags & EXT2_EXTENT_FLAGS_UNINIT))
+		blkcount = extent_prev.e_len;
 	if (handle_prev->path)
 		blkcount += handle_prev->level;
 	do {
@@ -1833,6 +1834,7 @@ blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *i
 				handle_prev->path[i].end_blk)
 				blkcount++;
 		}
+		blkcount += extent.e_len;
 		printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
 
 		errcode = ext2fs_extent_get(handle_prev, EXT2_EXTENT_NEXT,
@@ -1840,12 +1842,51 @@ blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *i
 	} while (errcode == 0);
 
 out:
-	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
-
+	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
 	ext2fs_extent_free(handle);
+	printf("2Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
+
 	ext2fs_extent_free(handle_prev);
+		printf("3Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
+
 	return blkcount;
 }
+
+
+
+errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode)
+{
+	ext2_extent_handle_t	handle;
+	struct ext2fs_extent	extent;
+	errcode_t		errcode;
+	int			i, j;
+	blk64_t			blkcount = 0;
+
+	errcode = ext2fs_extent_open2(fs, ino, inode, &handle);
+	if (errcode)
+		goto out;
+	errcode = ext2fs_extent_get(handle, EXT2_EXTENT_ROOT, &extent);
+	if (errcode)
+		goto out;
+	while (errcode == 0) {
+
+		for (i = 0; i <= handle->level; i++) {
+
+		}
+		for (i = 0; i < extent.e_len; i++)
+			ext2fs_unmark_block_bitmap2(fs->block_map, extent.e_pblk + i);
+
+		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
+	}
+
+out:
+	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
+
+	ext2fs_extent_free(handle);
+	return 0;
+}
+
+
 
 #ifdef DEBUG
 /*

@@ -298,18 +298,40 @@ err:
 errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list)
 {
 	struct ext2_inode_large inode;
-	int i;
 
 	fprintf(stderr, "Rewriting extent tree for inode %d\n", list->ino);
 	e2fsck_read_inode_full(ctx, list->ino, EXT2_INODE(&inode),
 				sizeof(inode), "e2fsck_rewrite_extent_tree");
 
 	/* Skip deleted inodes and inline data files */
-	if (inode.i_links_count == 0 ||
-	    inode.i_flags & EXT4_INLINE_DATA_FL)
+	if (inode.i_flags & EXT4_INLINE_DATA_FL)
 		return 0;
 
 	return __e2fsck_rewrite_extent_tree(ctx, list, &inode);
+}
+
+errcode_t e2fsck_rewrite_extent_tree_replay(e2fsck_t ctx, struct extent_list *list)
+{
+	struct ext2_inode_large inode;
+	int ret;
+
+	fprintf(stderr, "Rewriting extent tree for inode %d\n", list->ino);
+	memset(&inode, 0, sizeof(inode));
+	ext2fs_read_inode_full(ctx->fs, list->ino, EXT2_INODE(&inode),
+				sizeof(inode));
+
+	/* Skip deleted inodes and inline data files */
+	if (inode.i_flags & EXT4_INLINE_DATA_FL)
+		return 0;
+
+	ret = __e2fsck_rewrite_extent_tree(ctx, list, &inode);
+	ext2fs_iblk_set(ctx->fs, EXT2_INODE(&inode), ext2fs_count_blocks(ctx->fs, list->ino, EXT2_INODE(&inode)));
+	printf("%s: %d\n", __func__, __LINE__);
+	ext2fs_write_inode_full(ctx->fs, list->ino, EXT2_INODE(&inode), sizeof(inode));
+	printf("%s: %d\n", __func__, __LINE__);
+
+	return ret;
+
 }
 
 errcode_t e2fsck_read_extents(e2fsck_t ctx, struct extent_list *extents)
@@ -327,15 +349,16 @@ errcode_t e2fsck_read_extents(e2fsck_t ctx, struct extent_list *extents)
 	if (retval)
 		return -ENOMEM;
 
-	e2fsck_read_inode_full(ctx, extents->ino, EXT2_INODE(&inode),
-				sizeof(inode), "read_extents");
+	retval = ext2fs_read_inode(ctx->fs, extents->ino, EXT2_INODE(&inode));
 
+	printf("i_links %d, i_flags %x, retval %d\n", inode.i_links_count, inode.i_flags, retval);
 	/* Skip deleted inodes and inline data files */
-	if (inode.i_links_count == 0 || inode.i_flags & EXT4_INLINE_DATA_FL)
-		return 0;
+	//if (inode.i_links_count == 0 || inode.i_flags & EXT4_INLINE_DATA_FL)
+	//return 0;
 
-	if (!inode.i_flags & EXT4_EXTENTS_FL)
-		return 0;
+	//	if (!inode.i_flags & EXT4_EXTENTS_FL)
+	//	return 0;
+	printf("Got here i_links %d, i_flags %x\n", inode.i_links_count, inode.i_flags);
 	retval = load_extents(ctx, extents);
 	if (retval) {
 		ext2fs_free_mem(&extents->extents);

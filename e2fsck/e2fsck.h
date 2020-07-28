@@ -557,7 +557,8 @@ errcode_t e2fsck_should_rebuild_extents(e2fsck_t ctx,
 errcode_t e2fsck_read_extents(e2fsck_t ctx, struct extent_list *extents);
 errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx,
 				     struct extent_list * extents);
-
+errcode_t e2fsck_rewrite_extent_tree_replay(e2fsck_t ctx,
+				     struct extent_list * extents);
 
 /* journal.c */
 extern errcode_t e2fsck_check_ext3_journal(e2fsck_t ctx);
