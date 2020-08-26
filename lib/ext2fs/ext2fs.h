@@ -1330,6 +1330,7 @@ extern errcode_t ext2fs_fix_extents_checksums(ext2_filsys fs, ext2_ino_t ino,
 					      struct ext2_inode *inode);
 extern blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode);
 extern errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode);
+extern errcode_t ext2fs_mark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode);
 
 /* fallocate.c */
 #define EXT2_FALLOCATE_ZERO_BLOCKS	(0x1)

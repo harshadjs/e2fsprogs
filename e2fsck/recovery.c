@@ -813,7 +813,7 @@ static int do_one_pass(journal_t *journal,
 			brelse(bh);
 			if (err)
 				goto failed;
-
+			continue;
 		default:
 			jbd_debug(3, "Unrecognised magic %d, end of scan.\n",
 				  blocktype);

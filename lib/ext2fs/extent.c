@@ -1795,59 +1795,43 @@ out:
 #define max(a, b) ((a) > (b) ? (a) : (b))
 blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode)
 {
-	ext2_extent_handle_t	handle, handle_prev;
-	struct ext2fs_extent	extent, extent_prev;
+	ext2_extent_handle_t	handle;
+	struct ext2fs_extent	extent;
 	errcode_t		errcode;
 	int			i;
 	blk64_t			blkcount = 0;
+	blk64_t			*intermediate_nodes;
 
 	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
 	errcode = ext2fs_extent_open2(fs, ino, inode, &handle);
 	if (errcode)
 		goto out;
-	errcode = ext2fs_extent_open2(fs, ino, inode, &handle_prev);
-	if (errcode)
-		goto out;
+
 	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
 
 	errcode = ext2fs_extent_get(handle, EXT2_EXTENT_ROOT, &extent);
 	if (errcode)
 		goto out;
-	errcode = ext2fs_extent_get(handle_prev, EXT2_EXTENT_ROOT, &extent_prev);
-	if (errcode)
-		goto out;
+
+	ext2fs_get_array(handle->max_depth, sizeof(blk64_t), &intermediate_nodes);
 	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
-	if (!(extent_prev.e_flags & EXT2_EXTENT_FLAGS_UNINIT))
-		blkcount = extent_prev.e_len;
-	if (handle_prev->path)
-		blkcount += handle_prev->level;
-	do {
-		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
-		if (errcode)
-			break;
-
-		for (i = 0; i <= max(handle->level, handle_prev->level); i++) {
-			if (i > handle->level || i > handle_prev->level) {
-				blkcount++;
+	blkcount = handle->level;
+	while (!errcode) {
+		if (extent.e_flags & EXT2_EXTENT_FLAGS_LEAF) {
+			blkcount += extent.e_len;
+			for (i = 0; i < handle->level; i++) {
+				if (intermediate_nodes[i] != handle->path[i].end_blk) {
+					printf("ENDBLK %d\n", handle->path[i].end_blk);
+					blkcount++;
+					intermediate_nodes[i] = handle->path[i].end_blk;
+				}
 			}
-			if (handle->path[i].end_blk !=
-				handle_prev->path[i].end_blk)
-				blkcount++;
 		}
-		blkcount += extent.e_len;
-		printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
-
-		errcode = ext2fs_extent_get(handle_prev, EXT2_EXTENT_NEXT,
-						&extent_prev);
-	} while (errcode == 0);
-
+		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
+	} 
+	ext2fs_free_mem(&intermediate_nodes);
 out:
-	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
 	ext2fs_extent_free(handle);
-	printf("2Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
-
-	ext2fs_extent_free(handle_prev);
-		printf("3Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
 
 	return blkcount;
 }
@@ -1881,7 +1865,46 @@ errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_ino
 
 out:
 	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
+	ext2fs_mark_bb_dirty(fs);
 
+	ext2fs_extent_free(handle);
+	return 0;
+}
+
+errcode_t ext2fs_mark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode)
+{
+	ext2_extent_handle_t	handle;
+	struct ext2fs_extent	extent;
+	errcode_t		errcode;
+	int			i, j;
+	blk64_t			blkcount = 0;
+
+	errcode = ext2fs_extent_open2(fs, ino, inode, &handle);
+	if (errcode)
+		goto out;
+	errcode = ext2fs_extent_get(handle, EXT2_EXTENT_ROOT, &extent);
+	if (errcode)
+		goto out;
+	while (errcode == 0) {
+
+		for (i = 0; i <= handle->level; i++) {
+
+		}
+		if (extent.e_flags & EXT2_EXTENT_FLAGS_LEAF) {
+		printf("---> Marking %d-%d\n", extent.e_pblk, extent.e_pblk + extent.e_len);
+		for (i = 0; i < extent.e_len; i++)
+			ext2fs_mark_block_bitmap2(fs->block_map, extent.e_pblk + i);
+		} else {
+			ext2fs_mark_block_bitmap2(fs->block_map, extent.e_pblk);
+
+		}
+
+		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
+	}
+
+out:
+	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
+	ext2fs_mark_bb_dirty(fs);
 	ext2fs_extent_free(handle);
 	return 0;
 }
