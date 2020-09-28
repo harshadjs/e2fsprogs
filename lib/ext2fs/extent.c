@@ -1853,13 +1853,12 @@ errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_ino
 	if (errcode)
 		goto out;
 	while (errcode == 0) {
-
-		for (i = 0; i <= handle->level; i++) {
-
+		fprintf(stderr, "%s: %lu + %lu\n", __func__, extent.e_pblk, extent.e_len);
+		if (extent.e_flags & EXT2_EXTENT_FLAGS_LEAF) {
+			for (i = 0; i < extent.e_len; i++)
+				ext2fs_unmark_block_bitmap2(
+					fs->block_map, extent.e_pblk + i);
 		}
-		for (i = 0; i < extent.e_len; i++)
-			ext2fs_unmark_block_bitmap2(fs->block_map, extent.e_pblk + i);
-
 		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
 	}
 

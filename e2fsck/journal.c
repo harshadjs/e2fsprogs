@@ -40,13 +40,12 @@ static int bh_count = 0;
  */
 #undef USE_INODE_IO
 
+#if 1
 #undef jbd_debug
 #define jbd_debug(__i, ...) do {	\
 	printf(__VA_ARGS__);	\
 } while(0)
-
-
-static ext2fs_inode_bitmap modified_inodes;
+#endif
 
 /* Checksumming functions */
 static int e2fsck_journal_verify_csum_type(journal_t *j,
@@ -298,36 +297,6 @@ static inline __u8 *ext4_fc_tag_val(struct ext4_fc_tl *tl)
 	return (__u8 *)tl + sizeof(*tl);
 }
 
-/*
- * Record physical disk regions which are in use as per fast commit area. Our
- * simple replay phase allocator excludes these regions from allocation.
- */
-static int ext4_fc_record_regions(e2fsck_t ctx, int ino,
-		blk64_t lblk, blk64_t pblk, int len)
-{
-	struct e2fsck_fc_replay_state *state;
-	struct ext4_fc_alloc_region *region;
-
-	state = &ctx->fc_replay_state;
-	if (state->fc_regions_used == state->fc_regions_size) {
-		state->fc_regions_size +=
-			EXT4_FC_REPLAY_REALLOC_INCREMENT;
-		state->fc_regions = realloc(
-					state->fc_regions,
-					state->fc_regions_size *
-					sizeof(struct ext4_fc_alloc_region));
-		if (!state->fc_regions)
-			return -ENOMEM;
-	}
-	region = &state->fc_regions[state->fc_regions_used++];
-	region->ino = ino;
-	region->lblk = lblk;
-	region->pblk = pblk;
-	region->len = len;
-
-	return 0;
-}
-
 static void ext3_to_ext2fs_extent(struct ext2fs_extent *to,
 				  struct ext3_extent *from)
 {
@@ -337,6 +306,7 @@ static void ext3_to_ext2fs_extent(struct ext2fs_extent *to,
 	to->e_lblk = ext2fs_le32_to_cpu(from->ee_block);
 	to->e_len = ext2fs_le16_to_cpu(from->ee_len);
 	to->e_flags |= EXT2_EXTENT_FLAGS_LEAF;
+	fprintf(stderr, "%lu pblk, %d len\n", to->e_pblk, to->e_len);
 	if (to->e_len > EXT_INIT_MAX_LEN) {
 		to->e_len -= EXT_INIT_MAX_LEN;
 		to->e_flags |= EXT2_EXTENT_FLAGS_UNINIT;
@@ -392,10 +362,7 @@ static int ext4_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 
 	jbd_debug(1, "Scan phase starting, expected %d", expected_tid);
 	if (state->fc_replay_expected_off == 0) {
-		state->fc_cur_tag = 0;
-		state->fc_replay_num_tags = 0;
-		state->fc_crc = 0;
-		state->fc_extent_list = NULL;
+		memset(state, 0, sizeof(*state));
 		/* Check if we can stop early */
 		if (le16_to_cpu(((struct ext4_fc_tl *)start)->fc_tag)
 			!= EXT4_FC_TAG_HEAD) {
@@ -418,12 +385,6 @@ static int ext4_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 			ext = (struct ext4_fc_add_range *)ext4_fc_tag_val(tl);
 			ex = (struct ext3_extent *)&ext->fc_ex;
 			ext3_to_ext2fs_extent(&ext2fs_ex, ex);
-			ret = ext4_fc_record_regions(ctx,
-				le32_to_cpu(ext->fc_ino),
-				ext2fs_ex.e_lblk, ext2fs_ex.e_pblk,
-				ext2fs_ex.e_len);
-			if (ret < 0)
-				break;
 			ret = JBD2_FC_REPLAY_CONTINUE;
 		case EXT4_FC_TAG_DEL_RANGE:
 		case EXT4_FC_TAG_LINK:
@@ -448,8 +409,6 @@ static int ext4_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 			if (le32_to_cpu(tail->fc_tid) == expected_tid &&
 				le32_to_cpu(tail->fc_crc) == state->fc_crc) {
 				state->fc_replay_num_tags = state->fc_cur_tag;
-				state->fc_regions_valid =
-					state->fc_regions_used;
 				jbd_debug(1, "CONTINUE...\n");
 			} else {
 				ret = state->fc_replay_num_tags ?
@@ -485,30 +444,6 @@ static int ext4_fc_replay_scan(journal_t *j, struct buffer_head *bh,
 out_err:
 	return ret;
 }
-
-static void mark_blocks_used(ext2_filsys fs, blk64_t pblk, int count)
-{
-	int i = 0;
-
-	for (i = 0; i < count; i++) {
-		//printf("Marking %ld\n", pblk + i);
-		ext2fs_mark_block_bitmap2(fs->block_map, pblk + i);
-	}
-	ext2fs_mark_bb_dirty(fs);
-}
-
-static void mark_blocks_free(ext2_filsys fs, blk64_t pblk, int count)
-{
-	int i = 0;
-
-	for (i = 0; i < count; i++) {
-		if (!ext2fs_test_block_bitmap2(fs->block_map, pblk + i))
-			continue;
-		ext2fs_unmark_block_bitmap2(fs->block_map, pblk + i);
-	}
-	ext2fs_mark_bb_dirty(fs);
-}
-
 
 #define ex_end(__ex) ((__ex)->e_lblk + (__ex)->e_len - 1)
 #define ex_pend(__ex) ((__ex)->e_pblk + (__ex)->e_len - 1)
@@ -578,7 +513,7 @@ static int ex_len_compar(const void *arg1, const void *arg2)
 	return 0;
 }
 
-static void sort_and_merge_extents(struct extent_list *list)
+static void sort_and_merge_extents(e2fsck_t ctx, struct extent_list *list)
 {
 	blk64_t ex_end;
 	int i, j;
@@ -617,64 +552,11 @@ static void sort_and_merge_extents(struct extent_list *list)
 		list->count--;
 	}
 	dump_extents("end-sort-and-merge", list);
-
+	for (i = 0; i < list->count; i++)
+		ext2fs_mark_block_bitmap_range2(ctx->fs->block_map,
+			list->extents[i].e_pblk, list->extents[i].e_len);
 }
 
-/*
- * Record all the modified inodes during replay. We use this later to setup
- * block bitmaps correctly.
- */
-static int ext4_fc_record_modified_inode(e2fsck_t ctx, int ino)
-{
-	struct e2fsck_fc_replay_state *state = &ctx->fc_replay_state;
-	int i;
-
-	for (i = 0; i < state->fc_modified_inodes_used; i++)
-		if (state->fc_modified_inodes[i] == ino)
-			return 0;
-	if (state->fc_modified_inodes_used == state->fc_modified_inodes_size) {
-		state->fc_modified_inodes_size +=
-			EXT4_FC_REPLAY_REALLOC_INCREMENT;
-		state->fc_modified_inodes = realloc(
-					state->fc_modified_inodes, sizeof(int) *
-					state->fc_modified_inodes_size);
-		if (!state->fc_modified_inodes)
-			return -ENOMEM;
-	}
-	state->fc_modified_inodes[state->fc_modified_inodes_used++] = ino;
-	return 0;
-}
-
-static int ext4_fc_update_block_bitmaps(e2fsck_t ctx)
-{
-	struct e2fsck_fc_replay_state *state = &ctx->fc_replay_state;
-	struct extent_list list;
-	int i, j, ret;
-	struct ext2_inode inode;
-
-	for (i = 0; i < state->fc_modified_inodes_used; i++) {
-		list.ino = state->fc_modified_inodes[i];
-		ext2fs_read_inode(ctx->fs, state->fc_modified_inodes[i], &inode);
-		ext2fs_mark_bb_inode(ctx->fs,state->fc_modified_inodes[i], &inode);
-#if 0
-		ret = e2fsck_read_extents(ctx, &list);
-		if (ret)
-			return ret;
-		for (j = 0; j < list.count; j++) {
-
-			//printf("Marking %ld +%ld as 1\n",
-			//	list.extents[j].e_pblk,
-			//	list.extents[j].e_len);
-			mark_blocks_used(ctx->fs, list.extents[j].e_pblk,
-						list.extents[j].e_len);
-		}
-		ext2fs_free_mem(&list.extents);
-#endif
-	}
-
-	ext2fs_mark_bb_dirty(ctx->fs);
-	return 0;
-}
 
 // just reuse this fn for del also!
 /* must free blocks that are released */
@@ -690,19 +572,15 @@ static int ext2fs_add_extent_to_list(e2fsck_t ctx, struct extent_list *list,
 	printf("\n");
 	dump_extents("begin-add", list);
 
-	ext4_fc_record_modified_inode(ctx, list->ino);
-	ext2fs_mark_inode_bitmap2(modified_inodes, list->ino);
 	for (i = 0; i < list->count; i++) {
 		if (ex_end(&list->extents[i]) < add_ex.e_lblk)
 			continue;
 
-		mark_blocks_free(ctx->fs, list->extents[i].e_pblk,
-			list->extents[i].e_len);
-
 		/* Case 1: No overlap */
 		if (list->extents[i].e_lblk > ex_end(&add_ex))
 			break;
-
+		ext2fs_unmark_block_bitmap_range2(ctx->fs->block_map,
+			list->extents[i].e_pblk, list->extents[i].e_len);
 		/* Case 2: Split */
 		if (list->extents[i].e_lblk < add_ex.e_lblk &&
 			ex_end(&list->extents[i]) > ex_end(&add_ex)) {
@@ -721,6 +599,7 @@ static int ext2fs_add_extent_to_list(e2fsck_t ctx, struct extent_list *list,
 		/* Case 3: Exact overlap */
 		if (add_ex.e_lblk <= list->extents[i].e_lblk  &&
 			ex_end(&list->extents[i]) <= ex_end(&add_ex)) {
+
 			list->extents[i].e_len = 0;
 			continue;
 		}
@@ -744,7 +623,8 @@ static int ext2fs_add_extent_to_list(e2fsck_t ctx, struct extent_list *list,
 	}
 	//dump_extents("before-sort-merge-741", list);
 
-	sort_and_merge_extents(list);
+	sort_and_merge_extents(ctx, list);
+	ext2fs_mark_bb_dirty(ctx->fs);
 done:
 	dump_extents("end-add", list);
 	return 0;
@@ -841,7 +721,8 @@ static int ext4_fc_handle_link_and_create(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	ret = ext2fs_read_inode(fs, darg.ino, (struct ext2_inode *)&inode_large);
 	if (ret)
 		goto out;
-	jbd_debug(1, "31 inode %d, Link Count = %d\n", darg.ino, inode_large.i_links_count);
+	jbd_debug(1, "31 inode %d, Link Count = %d\n",
+			darg.ino, inode_large.i_links_count);
 	inode_large.i_links_count++;
 	ret = ext2fs_write_inode(fs, darg.ino, (struct ext2_inode *)&inode_large);
 	jbd_debug(1, "Write returned %d.., parent %d\n", ret, darg.parent_ino);
@@ -880,7 +761,6 @@ static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	struct ext2_inode_large *inode = NULL;
 	int ino, inode_len, ret;
 	struct e2fsck_fc_replay_state *state = &ctx->fc_replay_state;
-	struct extent_list *extent_list = state->fc_extent_list;
 
 	fc_inode = (struct ext4_fc_inode *)ext4_fc_tag_val(tl);
 	ino = le32_to_cpu(fc_inode->fc_ino);
@@ -892,46 +772,39 @@ static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	if (!inode)
 		goto out;
 
-
-	if (extent_list && extent_list->ino != 0) {
-		sort_and_merge_extents(extent_list);
-		e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
-		ext2fs_free_mem(&extent_list->extents);
-		extent_list->count = extent_list->size = extent_list->ino = 0;
-	}
-
 	ret = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)inode,
 					inode_len);
 	if (ret)
 		goto out;
-	ext2fs_unmark_bb_inode(ctx->fs, ino, EXT2_INODE(inode));
+	//ext2fs_unmark_bb_inode(ctx->fs, ino, EXT2_INODE(inode));
 
-	jbd_debug(1, "Handling inode %d with links %d extents %x\n", ino, inode->i_links_count, inode->i_flags);
+	jbd_debug(1, "Handling inode %d with links %d extents %x\n",
+		ino, inode->i_links_count, inode->i_flags);
 
-	if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_INODE_FULL && !ext2fs_test_inode_bitmap2(modified_inodes, ino)) {
+	if (le16_to_cpu(tl->fc_tag) == EXT4_FC_TAG_INODE_FULL) {
 		printf("Overwriting iblocks\n");
 		memcpy(inode, fc_inode->fc_raw_inode, inode_len);
 	} else {
 		printf("Preserving iblocks\n");
-		memcpy(inode, fc_inode->fc_raw_inode, offsetof(struct ext2_inode_large,
-			i_block));
+		memcpy(inode, fc_inode->fc_raw_inode,
+			offsetof(struct ext2_inode_large, i_block));
 		memcpy(&inode->i_generation,
-		&((struct ext2_inode_large *)(fc_inode->fc_raw_inode))->i_generation,
-		inode_len -
-		offsetof(struct ext2_inode_large,
-			i_generation));
+			&((struct ext2_inode_large *)(fc_inode->fc_raw_inode))->i_generation,
+			inode_len - offsetof(struct ext2_inode_large, i_generation));
 	}
-	ext2fs_iblk_set(ctx->fs, EXT2_INODE(inode), ext2fs_count_blocks(ctx->fs, ino, EXT2_INODE(inode)));
+	ext2fs_iblk_set(ctx->fs, EXT2_INODE(inode),
+		ext2fs_count_blocks(ctx->fs, ino, EXT2_INODE(inode)));
 	
-	 ext2fs_inode_csum_set(ctx->fs, ino, inode);
-	jbd_debug(1, "New Handling inode %d with links %d extents %x\n", ino, inode->i_links_count, inode->i_flags);
+	ext2fs_inode_csum_set(ctx->fs, ino, inode);
+	jbd_debug(1, "New Handling inode %d with links %d extents %x\n",
+		ino, inode->i_links_count, inode->i_flags);
 
-	ret = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)inode, inode_len);
+	ret = ext2fs_write_inode_full(ctx->fs, ino, (struct ext2_inode *)inode,
+					inode_len);
 	if (inode->i_links_count) {
 		ext2fs_mark_inode_bitmap2(ctx->fs->inode_map, ino);
 		ext2fs_mark_ib_dirty(ctx->fs);
 	}
-	ext4_fc_record_modified_inode(ctx, ino);
 
 out:
 	if (inode)
@@ -941,6 +814,57 @@ out:
 
 }
 
+static int ext4_fc_handle_add_extent(e2fsck_t ctx, struct ext4_fc_tl *tl)
+{
+	struct extent_list *extent_list = &ctx->fc_replay_state.fc_extent_list;
+	struct ext2fs_extent extent;
+	struct ext4_fc_add_range *add_range;
+	struct ext4_fc_del_range *del_range;
+	int ret = 0;
+
+	add_range = (struct ext4_fc_add_range *)ext4_fc_tag_val(tl);
+	extent_list->ino = le32_to_cpu(add_range->fc_ino);
+	ret = e2fsck_read_extents(ctx, extent_list);
+	if (ret)
+		goto out;
+	jbd_debug(1, "Adding in %d\n", extent_list->ino);
+	memset(&extent, 0, sizeof(extent));
+	ext3_to_ext2fs_extent(&extent, (struct ext3_extent *)(
+				add_range->fc_ex));
+	ret = ext2fs_add_extent_to_list(ctx, extent_list, &extent, 0);
+	if (ret)
+		goto out;
+	e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
+
+out:
+	ext2fs_free_mem(&extent_list->extents);
+	return ret;
+}
+
+static int ext4_fc_handle_del_range(e2fsck_t ctx, struct ext4_fc_tl *tl)
+{
+	struct extent_list *extent_list = &ctx->fc_replay_state.fc_extent_list;
+	struct ext2fs_extent extent;
+	struct ext4_fc_del_range *del_range;
+	int ret;
+
+	del_range = (struct ext4_fc_del_range *)ext4_fc_tag_val(tl);
+	memset(&extent, 0, sizeof(extent));
+	extent.e_lblk = ext2fs_le32_to_cpu(del_range->fc_lblk);
+	extent.e_len = ext2fs_le16_to_cpu(del_range->fc_len);
+	extent_list->ino = le32_to_cpu(del_range->fc_ino);
+	ret = e2fsck_read_extents(ctx, extent_list);
+	if (ret)
+		return ret;
+	jbd_debug(1, "Deleting from %d\n", extent_list->ino);
+	ret = ext2fs_add_extent_to_list(ctx, extent_list, &extent, 1);
+	if (ret)
+		return ret;
+	e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
+out:
+	ext2fs_free_mem(&extent_list->extents);
+	return 0;
+}
 /*
  * Main recovery path entry point.
  * The meaning of return codes is similar as above.
@@ -949,22 +873,10 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 				enum passtype pass, int off, tid_t expected_tid)
 {
 	e2fsck_t ctx = journal->j_fs_dev->k_ctx;
+	struct e2fsck_fc_replay_state *state = &ctx->fc_replay_state;
+	int ret = JBD2_FC_REPLAY_CONTINUE;
 	struct ext4_fc_tl *tl;
 	__u8 *start, *end;
-	int ret = JBD2_FC_REPLAY_CONTINUE;
-	struct e2fsck_fc_replay_state *state = &ctx->fc_replay_state;
-	ext2_filsys fs = journal->j_fs_dev->k_ctx->fs;
-	struct ext4_fc_tail *tail;
-	struct ext4_fc_dentry_info *fcd;
-	struct ext4_fc_add_range *add_range;
-	struct ext4_fc_del_range *del_range;
-	int parent_ino, ino, inode_len;
-	int extents_ino =  0;
-	struct ext2_inode *inode;
-	char *dname;
-	struct extent_list *extent_list = state->fc_extent_list;
-	struct ext2fs_extent extent;
-	struct ext2_inode inode_large;
 
 	jbd_debug(1, "CALLED\n");
 	if (pass == PASS_SCAN) {
@@ -972,41 +884,8 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 		return ext4_fc_replay_scan(journal, bh, off, expected_tid);
 	}
 
-	if (!state->fc_replay_num_tags) {
-		jbd_debug(1, "--------------------Replay stops----------------\n");
-		if (state->fc_current_pass != pass)
-			return JBD2_FC_REPLAY_STOP;
-		jbd_debug(1, "Step 0\n");
-
-		if (extent_list && extent_list->ino != 0) {
-			sort_and_merge_extents(extent_list);
-			e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
-			ext2fs_free_mem(&extent_list->extents);
-			free(state->fc_extent_list);
-			state->fc_extent_list = NULL;
-		}
-		jbd_debug(1, "Step 1\n");
-
-		ret = ext4_fc_update_block_bitmaps(ctx);
-		if (ret)
-			return ret;
-		jbd_debug(1, "Step 2\n");
-
-		ext2fs_calculate_summary_stats(ctx->fs);
-
-		ret = ext2fs_write_block_bitmap(ctx->fs);
-		jbd_debug(1, "ext2fs_write_block_bitmap = %d\n",ret);
-
-		ext2fs_write_inode_bitmap(ctx->fs);
-
-		ext2fs_mark_super_dirty(ctx->fs);
-		ext2fs_set_gdt_csum(ctx->fs);
-
-		ext2fs_flush(ctx->fs);
-		ext2fs_free_inode_bitmap(modified_inodes);
-
-		return JBD2_FC_REPLAY_STOP;
-	}
+	if (state->fc_replay_num_tags == 0)
+		goto replay_done;
 
 	if (state->fc_current_pass != pass) {
 		state->fc_current_pass = pass;
@@ -1017,32 +896,14 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 			jbd_debug(1, "Error %d while reading bitmaps\n", ret);
 			return ret;
 		}
-		state->fc_extent_list = malloc(sizeof(struct extent_list));
-		memset(state->fc_extent_list, 0, sizeof(state->fc_extent_list));
-		extent_list = state->fc_extent_list;
-		memset(extent_list, 0, sizeof(*extent_list));
-		ext2fs_allocate_inode_bitmap(fs, "modified inodes", &modified_inodes);
 	}
-
 
 	start = (__u8 *)bh->b_data;
 	end = (__u8 *)bh->b_data + journal->j_blocksize - 1;
 
 	fc_for_each_tl(start, end, tl) {
-		if (state->fc_replay_num_tags == 0) {
-			ret = JBD2_FC_REPLAY_STOP;
-			printf("----------------?-------------------\n");
-			ext2fs_write_block_bitmap(ctx->fs);
-			ext2fs_write_inode_bitmap(ctx->fs);	
-
-			ext2fs_calculate_summary_stats(ctx->fs);
-
-			ext2fs_mark_super_dirty(ctx->fs);
-			ext2fs_set_gdt_csum(ctx->fs);
-
-			ext2fs_flush(ctx->fs);
-				break;
-		}
+		if (state->fc_replay_num_tags == 0)
+			goto replay_done;
 		jbd_debug(3, "---------------Replay: %s------------------\n",
 				tag2str(le16_to_cpu(tl->fc_tag)));
 		state->fc_replay_num_tags--;
@@ -1055,58 +916,14 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 			ret = ext4_fc_handle_unlink(ctx, tl);
 			break;
 		case EXT4_FC_TAG_ADD_RANGE:
-			add_range = (struct ext4_fc_add_range *)ext4_fc_tag_val(tl);
-			if (extent_list->ino != le32_to_cpu(add_range->fc_ino)) {
-				if (extent_list->ino != 0) {
-					sort_and_merge_extents(extent_list);
-					e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
-					ext2fs_free_mem(&extent_list->extents);
-					extent_list->count = extent_list->size = extent_list->ino = 0;
-
-				}
-				extent_list->ino = le32_to_cpu(add_range->fc_ino);
-				ret = e2fsck_read_extents(ctx, extent_list);
-				if (ret)
-					break;
-			}
-			extent_list->ino = le32_to_cpu(add_range->fc_ino);
-			jbd_debug(1, "Adding in %d\n", extent_list->ino);
-			ext3_to_ext2fs_extent(&extent, (struct ext3_extent *)(
-						add_range->fc_ex));
-			ret = ext2fs_add_extent_to_list(ctx, extent_list, &extent, 0);
-			if (ret)
-				break;
-			mark_blocks_used(ctx->fs, extent.e_pblk,  extent.e_len);
+			ret = ext4_fc_handle_add_extent(ctx, tl);
 			break;
-
 		case EXT4_FC_TAG_DEL_RANGE:
-			del_range = (struct ext4_fc_del_range *)ext4_fc_tag_val(tl);
-			extent.e_lblk = ext2fs_le32_to_cpu(del_range->fc_lblk);
-			extent.e_len = ext2fs_le16_to_cpu(del_range->fc_len);
-			if (extent_list->ino != le32_to_cpu(del_range->fc_ino)) {
-				if (extent_list->ino != 0) {
-					sort_and_merge_extents(extent_list);
-					e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
-					ext2fs_free_mem(&extent_list->extents);
-					extent_list->count = extent_list->size = extent_list->ino = 0;
-				}
-				extent_list->ino = le32_to_cpu(del_range->fc_ino);
-				printf("Reading extents from %d\n", extent_list->ino);
-				ret = e2fsck_read_extents(ctx, extent_list);
-				if (ret)
-					break;
-			}
-			extent_list->ino = le32_to_cpu(del_range->fc_ino);
-			jbd_debug(1, "Del from %d\n", extent_list->ino);
-
-			ret = ext2fs_add_extent_to_list(ctx, extent_list, &extent, 1);
-			if (ret)
-				break;
+			ret = ext4_fc_handle_del_range(ctx, tl);
 			break;
 		case EXT4_FC_TAG_INODE_PARTIAL:
 		case EXT4_FC_TAG_INODE_FULL:
 			ret = ext4_fc_handle_inode(ctx, tl);
-			jbd_debug(1, "Inode tag handled\n");
 			break;
 		case EXT4_FC_TAG_PAD:
 		case EXT4_FC_TAG_TAIL:
@@ -1121,6 +938,23 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 		ret = JBD2_FC_REPLAY_CONTINUE;
 	}
 	return ret;
+replay_done:
+	jbd_debug(1, "End of fast commit replay\n");
+	if (state->fc_current_pass != pass)
+		return JBD2_FC_REPLAY_STOP;
+
+	ext2fs_calculate_summary_stats(ctx->fs);
+
+	ext2fs_write_block_bitmap(ctx->fs);
+	ext2fs_write_inode_bitmap(ctx->fs);
+
+	ext2fs_mark_super_dirty(ctx->fs);
+	ext2fs_set_gdt_csum(ctx->fs);
+
+	ext2fs_flush(ctx->fs);
+
+	return JBD2_FC_REPLAY_STOP;
+
 }
 
 static errcode_t e2fsck_get_journal(e2fsck_t ctx, journal_t **ret_journal)

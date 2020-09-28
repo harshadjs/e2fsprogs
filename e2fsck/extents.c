@@ -277,11 +277,6 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 
 	if (delta)
 		quota_data_add(ctx->qctx, inode, list->ino, delta << 9);
-	if (!ext_written)
-		blkcount = 0;
-	else
-		blkcount = 128;
-	ext2fs_iblk_set(ctx->fs, EXT2_INODE(inode), blkcount / 8);
 
 #if defined(DEBUG) || defined(DEBUG_SUMMARY)
 	printf("rebuild: ino=%d extents=%d->%d\n", ino, list->ext_read,

@@ -119,16 +119,12 @@ struct ext4_fc_alloc_region {
 };
 
 struct e2fsck_fc_replay_state {
+	struct extent_list fc_extent_list;
 	int fc_replay_num_tags;
 	int fc_replay_expected_off;
 	int fc_current_pass;
 	int fc_cur_tag;
 	int fc_crc;
-	struct ext4_fc_alloc_region *fc_regions;
-	int fc_regions_size, fc_regions_used, fc_regions_valid;
-	int *fc_modified_inodes;
-	int fc_modified_inodes_used, fc_modified_inodes_size;
-	void *fc_extent_list;
 };
 
 #define region_last(__region) (((__region)->lblk) + ((__region)->len) - 1)

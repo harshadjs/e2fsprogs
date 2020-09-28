@@ -131,7 +131,7 @@ static int qcow2_read_l2_table(struct ext2_qcow2_image *img,
 	return 0;
 }
 
-static int qcow2_copy_data(int fdin, int fdout, __u64 off_in,
+int qcow2_copy_data(int fdin, int fdout, __u64 off_in,
 			   __u64 off_out, void *buf, size_t count)
 {
 	size_t size;

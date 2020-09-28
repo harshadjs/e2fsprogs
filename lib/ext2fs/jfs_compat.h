@@ -112,6 +112,6 @@ struct journal_s
 #define inline
 #endif
 
-#include "fast_commit.h"
+//#include "fast_commit.h"
 
 #endif /* _JFS_COMPAT_H */
