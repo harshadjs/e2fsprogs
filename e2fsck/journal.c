@@ -40,12 +40,14 @@ static int bh_count = 0;
  */
 #undef USE_INODE_IO
 
-#if 1
+#if 0
 #undef jbd_debug
 #define jbd_debug(__i, ...) do {	\
 	printf(__VA_ARGS__);	\
 } while(0)
 #endif
+#define printf(...)
+#define fprintf(...)
 
 /* Checksumming functions */
 static int e2fsck_journal_verify_csum_type(journal_t *j,
@@ -659,6 +661,31 @@ static inline void tl_to_darg(struct dentry_info_args *darg,
 		darg->dname, darg->ino, darg->parent_ino);
 }
 
+static int e2fsck_fc_read_extents(e2fsck_t ctx, int ino,
+		struct extent_list **list)
+{
+	struct extent_list *extent_list = &ctx->fc_replay_state.fc_extent_list;
+
+	*list = extent_list;
+	if (extent_list->ino == ino)
+		return 0;
+
+	extent_list->ino = ino;
+	return e2fsck_read_extents(ctx, *list);
+}
+
+static void e2fsck_fc_flush_extents(e2fsck_t ctx, int ino)
+{
+	struct extent_list *extent_list = &ctx->fc_replay_state.fc_extent_list;
+
+	if (extent_list->ino == 0 || extent_list->ino == ino)
+		return;
+	printf("Flushing inode!!\n");
+	e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
+	extent_list->ino = 0;
+	ext2fs_free_mem(&extent_list->extents);
+}
+
 static int ext4_fc_handle_unlink(e2fsck_t ctx, struct ext4_fc_tl *tl)
 {
 	struct ext2_inode inode;
@@ -668,6 +695,7 @@ static int ext4_fc_handle_unlink(e2fsck_t ctx, struct ext4_fc_tl *tl)
 
 	tl_to_darg(&darg, tl);
 
+	e2fsck_fc_flush_extents(ctx, darg.ino);
 	ret = ext2fs_unlink(ctx->fs, darg.parent_ino, darg.dname, darg.ino, 0);
 	if (ret)
 		goto out;
@@ -717,6 +745,8 @@ static int ext4_fc_handle_link_and_create(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	int ret, filetype, mode;
 
 	tl_to_darg(&darg, tl);
+
+	e2fsck_fc_flush_extents(ctx, darg.ino);
 
 	ret = ext2fs_read_inode(fs, darg.ino, (struct ext2_inode *)&inode_large);
 	if (ret)
@@ -771,6 +801,7 @@ static int ext4_fc_handle_inode(e2fsck_t ctx, struct ext4_fc_tl *tl)
 	inode = malloc(inode_len);
 	if (!inode)
 		goto out;
+	e2fsck_fc_flush_extents(ctx, ino);
 
 	ret = ext2fs_read_inode_full(ctx->fs, ino, (struct ext2_inode *)inode,
 					inode_len);
@@ -816,54 +847,46 @@ out:
 
 static int ext4_fc_handle_add_extent(e2fsck_t ctx, struct ext4_fc_tl *tl)
 {
-	struct extent_list *extent_list = &ctx->fc_replay_state.fc_extent_list;
+	struct extent_list *extent_list;
 	struct ext2fs_extent extent;
 	struct ext4_fc_add_range *add_range;
 	struct ext4_fc_del_range *del_range;
-	int ret = 0;
+	int ret = 0, ino;
 
 	add_range = (struct ext4_fc_add_range *)ext4_fc_tag_val(tl);
-	extent_list->ino = le32_to_cpu(add_range->fc_ino);
-	ret = e2fsck_read_extents(ctx, extent_list);
+	ino = le32_to_cpu(add_range->fc_ino);
+
+	e2fsck_fc_flush_extents(ctx, ino);
+
+	ret = e2fsck_fc_read_extents(ctx, ino, &extent_list);
 	if (ret)
-		goto out;
+		return ret;
 	jbd_debug(1, "Adding in %d\n", extent_list->ino);
 	memset(&extent, 0, sizeof(extent));
 	ext3_to_ext2fs_extent(&extent, (struct ext3_extent *)(
 				add_range->fc_ex));
-	ret = ext2fs_add_extent_to_list(ctx, extent_list, &extent, 0);
-	if (ret)
-		goto out;
-	e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
-
-out:
-	ext2fs_free_mem(&extent_list->extents);
-	return ret;
+	return ext2fs_add_extent_to_list(ctx, extent_list, &extent, 0);
 }
 
 static int ext4_fc_handle_del_range(e2fsck_t ctx, struct ext4_fc_tl *tl)
 {
-	struct extent_list *extent_list = &ctx->fc_replay_state.fc_extent_list;
+	struct extent_list *extent_list;
 	struct ext2fs_extent extent;
 	struct ext4_fc_del_range *del_range;
-	int ret;
+	int ret, ino;
 
 	del_range = (struct ext4_fc_del_range *)ext4_fc_tag_val(tl);
+	ino = le32_to_cpu(del_range->fc_ino);
+	e2fsck_fc_flush_extents(ctx, ino);
+
 	memset(&extent, 0, sizeof(extent));
 	extent.e_lblk = ext2fs_le32_to_cpu(del_range->fc_lblk);
 	extent.e_len = ext2fs_le16_to_cpu(del_range->fc_len);
-	extent_list->ino = le32_to_cpu(del_range->fc_ino);
-	ret = e2fsck_read_extents(ctx, extent_list);
+	ret = e2fsck_fc_read_extents(ctx, ino, &extent_list);
 	if (ret)
 		return ret;
 	jbd_debug(1, "Deleting from %d\n", extent_list->ino);
-	ret = ext2fs_add_extent_to_list(ctx, extent_list, &extent, 1);
-	if (ret)
-		return ret;
-	e2fsck_rewrite_extent_tree_replay(ctx, extent_list);
-out:
-	ext2fs_free_mem(&extent_list->extents);
-	return 0;
+	return ext2fs_add_extent_to_list(ctx, extent_list, &extent, 1);
 }
 /*
  * Main recovery path entry point.
@@ -925,8 +948,9 @@ static int ext4_fc_replay(journal_t *journal, struct buffer_head *bh,
 		case EXT4_FC_TAG_INODE_FULL:
 			ret = ext4_fc_handle_inode(ctx, tl);
 			break;
-		case EXT4_FC_TAG_PAD:
 		case EXT4_FC_TAG_TAIL:
+			e2fsck_fc_flush_extents(ctx, 0);
+		case EXT4_FC_TAG_PAD:
 		case EXT4_FC_TAG_HEAD:
 			break;
 		default:
