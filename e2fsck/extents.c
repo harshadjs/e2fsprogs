@@ -20,6 +20,7 @@
 #undef DEBUG_SUMMARY
 #undef DEBUG_FREE
 
+#define NUM_EXTENTS	341	/* about one ETB' worth of extents */
 
 static errcode_t e2fsck_rebuild_extents(e2fsck_t ctx, ext2_ino_t ino);
 
@@ -208,7 +209,6 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 	inode->i_flags &= ~EXT4_EXTENTS_FL;
 	memset(inode->i_block, 0, sizeof(inode->i_block));
 
-	printf("reached %d\n", __LINE__);
 	/* Make a note of freed blocks */
 	quota_data_sub(ctx->qctx, inode, list->ino,
 		       list->blocks_freed * ctx->fs->blocksize);
@@ -216,21 +216,17 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 					list->blocks_freed);
 	if (retval)
 		return retval;
-	printf("reached %d\n", __LINE__);
 
 	/* Now stuff extents into the file */
 	retval = ext2fs_extent_open2(ctx->fs, list->ino, EXT2_INODE(inode),
 					&handle);
 	if (retval)
 		return retval;
-	printf("reached %d\n", __LINE__);
 
 	ext_written = 0;
 	ext2fs_iblk_set(ctx->fs, EXT2_INODE(inode), 0);
 
 	start_val = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(inode));
-	printf("start_val = %d\n", start_val);
-
 
 	for (i = 0, ex = list->extents; i < list->count; i++, ex++) {
 		if (ex->e_len == 0)
@@ -257,7 +253,7 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 			}
 		}
 
-#ifndef DEBUG
+#ifdef DEBUG
 		printf("W: ino=%d pblk=%llu lblk=%llu len=%u\n", list->ino,
 				extent.e_pblk, extent.e_lblk, extent.e_len);
 #endif
@@ -273,8 +269,6 @@ errcode_t __e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list,
 
 	delta = ext2fs_get_stat_i_blocks(ctx->fs, EXT2_INODE(inode)) -
 		start_val;
-	printf("delta = %d\n", delta);
-
 	if (delta)
 		quota_data_add(ctx->qctx, inode, list->ino, delta << 9);
 
@@ -294,7 +288,6 @@ errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list)
 {
 	struct ext2_inode_large inode;
 
-	fprintf(stderr, "Rewriting extent tree for inode %d\n", list->ino);
 	e2fsck_read_inode_full(ctx, list->ino, EXT2_INODE(&inode),
 				sizeof(inode), "e2fsck_rewrite_extent_tree");
 
@@ -305,12 +298,12 @@ errcode_t e2fsck_rewrite_extent_tree(e2fsck_t ctx, struct extent_list *list)
 	return __e2fsck_rewrite_extent_tree(ctx, list, &inode);
 }
 
-errcode_t e2fsck_rewrite_extent_tree_replay(e2fsck_t ctx, struct extent_list *list)
+errcode_t e2fsck_rewrite_extent_tree_replay(e2fsck_t ctx,
+	struct extent_list *list)
 {
 	struct ext2_inode_large inode;
 	int ret;
 
-	fprintf(stderr, "Rewriting extent tree for inode %d\n", list->ino);
 	memset(&inode, 0, sizeof(inode));
 	ext2fs_read_inode_full(ctx->fs, list->ino, EXT2_INODE(&inode),
 				sizeof(inode));
@@ -320,10 +313,10 @@ errcode_t e2fsck_rewrite_extent_tree_replay(e2fsck_t ctx, struct extent_list *li
 		return 0;
 
 	ret = __e2fsck_rewrite_extent_tree(ctx, list, &inode);
-	ext2fs_iblk_set(ctx->fs, EXT2_INODE(&inode), ext2fs_count_blocks(ctx->fs, list->ino, EXT2_INODE(&inode)));
-	printf("%s: %d\n", __func__, __LINE__);
-	ext2fs_write_inode_full(ctx->fs, list->ino, EXT2_INODE(&inode), sizeof(inode));
-	printf("%s: %d\n", __func__, __LINE__);
+	ext2fs_iblk_set(ctx->fs, EXT2_INODE(&inode),
+		ext2fs_count_blocks(ctx->fs, list->ino, EXT2_INODE(&inode)));
+	ext2fs_write_inode_full(ctx->fs, list->ino, EXT2_INODE(&inode),
+		sizeof(inode));
 
 	return ret;
 
@@ -345,21 +338,15 @@ errcode_t e2fsck_read_extents(e2fsck_t ctx, struct extent_list *extents)
 		return -ENOMEM;
 
 	retval = ext2fs_read_inode(ctx->fs, extents->ino, EXT2_INODE(&inode));
+	if (retval)
+		goto err_out;
 
-	printf("i_links %d, i_flags %x, retval %d\n", inode.i_links_count, inode.i_flags, retval);
-	/* Skip deleted inodes and inline data files */
-	//if (inode.i_links_count == 0 || inode.i_flags & EXT4_INLINE_DATA_FL)
-	//return 0;
-
-	//	if (!inode.i_flags & EXT4_EXTENTS_FL)
-	//	return 0;
-	printf("Got here i_links %d, i_flags %x\n", inode.i_links_count, inode.i_flags);
 	retval = load_extents(ctx, extents);
-	if (retval) {
-		ext2fs_free_mem(&extents->extents);
-		return retval;
-	}
-	return 0;
+	if (!retval)
+		return 0;
+err_out:
+	ext2fs_free_mem(&extents->extents);
+	return retval;
 }
 
 static errcode_t rebuild_extent_tree(e2fsck_t ctx, struct extent_list *list,

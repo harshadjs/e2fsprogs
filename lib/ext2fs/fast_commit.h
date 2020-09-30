@@ -103,21 +103,6 @@ struct ext4_fc_stats {
 	int fc_numblks;
 };
 
-#define EXT4_FC_REPLAY_REALLOC_INCREMENT	4
-
-/*
- * Physical block regions added to different inodes due to fast commit
- * recovery. These are set during the SCAN phase. During the replay phase,
- * our allocator excludes these from its allocation. This ensures that
- * we don't accidentally allocating a block that is going to be used by
- * another inode.
- */
-struct ext4_fc_alloc_region {
-	blk64_t lblk;
-	blk64_t pblk;
-	int ino, len;
-};
-
 struct e2fsck_fc_replay_state {
 	struct extent_list fc_extent_list;
 	int fc_replay_num_tags;
@@ -126,8 +111,6 @@ struct e2fsck_fc_replay_state {
 	int fc_cur_tag;
 	int fc_crc;
 };
-
-#define region_last(__region) (((__region)->lblk) + ((__region)->len) - 1)
 
 #define fc_for_each_tl(__start, __end, __tl)				\
 	for (tl = (struct ext4_fc_tl *)start;				\

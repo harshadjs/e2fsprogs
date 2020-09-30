@@ -911,8 +911,6 @@ extern blk64_t ext2fs_inode_data_blocks2(ext2_filsys fs,
 					 struct ext2_inode *inode);
 extern blk64_t ext2fs_inode_i_blocks(ext2_filsys fs,
 				     struct ext2_inode *inode);
-void ext2fs_inode_set_i_blocks(ext2_filsys fs,
-					struct ext2_inode *inode, blk64_t blks);
 extern blk64_t ext2fs_get_stat_i_blocks(ext2_filsys fs,
 					struct ext2_inode *inode);
 extern blk64_t ext2fs_blocks_count(struct ext2_super_block *super);
@@ -1328,9 +1326,12 @@ extern errcode_t ext2fs_extent_fix_parents(ext2_extent_handle_t handle);
 extern size_t ext2fs_max_extent_depth(ext2_extent_handle_t handle);
 extern errcode_t ext2fs_fix_extents_checksums(ext2_filsys fs, ext2_ino_t ino,
 					      struct ext2_inode *inode);
-extern blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode);
-extern errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode);
-extern errcode_t ext2fs_mark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode);
+extern blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino,
+					struct ext2_inode *inode);
+extern errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino,
+					struct ext2_inode *inode);
+extern errcode_t ext2fs_mark_bb_inode(ext2_filsys fs, ext2_ino_t ino,
+					struct ext2_inode *inode);
 
 /* fallocate.c */
 #define EXT2_FALLOCATE_ZERO_BLOCKS	(0x1)
@@ -1939,7 +1940,6 @@ _INLINE_ errcode_t ext2fs_resize_array(unsigned long size,
  */
 _INLINE_ void ext2fs_mark_super_dirty(ext2_filsys fs)
 {
-	printf("MARKING SUPER DIRTY\n");
 	fs->flags |= EXT2_FLAG_DIRTY | EXT2_FLAG_CHANGED;
 }
 

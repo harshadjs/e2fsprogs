@@ -168,16 +168,10 @@ errcode_t ext2fs_extent_header_verify(void *ptr, int size)
 	struct ext3_extent_header *eh = ptr;
 
 	dbg_show_header(eh);
-	if (ext2fs_le16_to_cpu(eh->eh_magic) != EXT3_EXT_MAGIC) {
-			printf ("CASE 3\n");
-
+	if (ext2fs_le16_to_cpu(eh->eh_magic) != EXT3_EXT_MAGIC)
 		return EXT2_ET_EXTENT_HEADER_BAD;
-	}
-	if (ext2fs_le16_to_cpu(eh->eh_entries) > ext2fs_le16_to_cpu(eh->eh_max)) {
-			printf ("CASE 3\n");
-
+	if (ext2fs_le16_to_cpu(eh->eh_entries) > ext2fs_le16_to_cpu(eh->eh_max))
 		return EXT2_ET_EXTENT_HEADER_BAD;
-	}
 	if (eh->eh_depth == 0)
 		entry_size = sizeof(struct ext3_extent);
 	else
@@ -187,10 +181,8 @@ errcode_t ext2fs_extent_header_verify(void *ptr, int size)
 	/* Allow two extent-sized items at the end of the block, for
 	 * ext4_extent_tail with checksum in the future. */
 	if ((ext2fs_le16_to_cpu(eh->eh_max) > eh_max) ||
-	    (ext2fs_le16_to_cpu(eh->eh_max) < (eh_max - 2))) {
-		printf ("CASE 3\n");
+	    (ext2fs_le16_to_cpu(eh->eh_max) < (eh_max - 2)))
 		return EXT2_ET_EXTENT_HEADER_BAD;
-	    }
 
 	return 0;
 }
@@ -1792,8 +1784,8 @@ out:
 	fs->flags = save_flags;
 	return errcode;
 }
-#define max(a, b) ((a) > (b) ? (a) : (b))
-blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode)
+blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino,
+			struct ext2_inode *inode)
 {
 	ext2_extent_handle_t	handle;
 	struct ext2fs_extent	extent;
@@ -1802,28 +1794,26 @@ blk64_t ext2fs_count_blocks(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *i
 	blk64_t			blkcount = 0;
 	blk64_t			*intermediate_nodes;
 
-	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
 	errcode = ext2fs_extent_open2(fs, ino, inode, &handle);
 	if (errcode)
 		goto out;
-
-	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
 
 	errcode = ext2fs_extent_get(handle, EXT2_EXTENT_ROOT, &extent);
 	if (errcode)
 		goto out;
 
-	ext2fs_get_array(handle->max_depth, sizeof(blk64_t), &intermediate_nodes);
-	printf("Inode %d %d blkcount %d\n", ino, __LINE__, blkcount);
+	ext2fs_get_array(handle->max_depth, sizeof(blk64_t),
+				&intermediate_nodes);
 	blkcount = handle->level;
 	while (!errcode) {
 		if (extent.e_flags & EXT2_EXTENT_FLAGS_LEAF) {
 			blkcount += extent.e_len;
 			for (i = 0; i < handle->level; i++) {
-				if (intermediate_nodes[i] != handle->path[i].end_blk) {
-					printf("ENDBLK %d\n", handle->path[i].end_blk);
+				if (intermediate_nodes[i] !=
+					handle->path[i].end_blk) {
 					blkcount++;
-					intermediate_nodes[i] = handle->path[i].end_blk;
+					intermediate_nodes[i] =
+						handle->path[i].end_blk;
 				}
 			}
 		}
@@ -1835,80 +1825,6 @@ out:
 
 	return blkcount;
 }
-
-
-
-errcode_t ext2fs_unmark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode)
-{
-	ext2_extent_handle_t	handle;
-	struct ext2fs_extent	extent;
-	errcode_t		errcode;
-	int			i, j;
-	blk64_t			blkcount = 0;
-
-	errcode = ext2fs_extent_open2(fs, ino, inode, &handle);
-	if (errcode)
-		goto out;
-	errcode = ext2fs_extent_get(handle, EXT2_EXTENT_ROOT, &extent);
-	if (errcode)
-		goto out;
-	while (errcode == 0) {
-		fprintf(stderr, "%s: %lu + %lu\n", __func__, extent.e_pblk, extent.e_len);
-		if (extent.e_flags & EXT2_EXTENT_FLAGS_LEAF) {
-			for (i = 0; i < extent.e_len; i++)
-				ext2fs_unmark_block_bitmap2(
-					fs->block_map, extent.e_pblk + i);
-		}
-		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
-	}
-
-out:
-	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
-	ext2fs_mark_bb_dirty(fs);
-
-	ext2fs_extent_free(handle);
-	return 0;
-}
-
-errcode_t ext2fs_mark_bb_inode(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode)
-{
-	ext2_extent_handle_t	handle;
-	struct ext2fs_extent	extent;
-	errcode_t		errcode;
-	int			i, j;
-	blk64_t			blkcount = 0;
-
-	errcode = ext2fs_extent_open2(fs, ino, inode, &handle);
-	if (errcode)
-		goto out;
-	errcode = ext2fs_extent_get(handle, EXT2_EXTENT_ROOT, &extent);
-	if (errcode)
-		goto out;
-	while (errcode == 0) {
-
-		for (i = 0; i <= handle->level; i++) {
-
-		}
-		if (extent.e_flags & EXT2_EXTENT_FLAGS_LEAF) {
-		printf("---> Marking %d-%d\n", extent.e_pblk, extent.e_pblk + extent.e_len);
-		for (i = 0; i < extent.e_len; i++)
-			ext2fs_mark_block_bitmap2(fs->block_map, extent.e_pblk + i);
-		} else {
-			ext2fs_mark_block_bitmap2(fs->block_map, extent.e_pblk);
-
-		}
-
-		errcode = ext2fs_extent_get(handle, EXT2_EXTENT_NEXT, &extent);
-	}
-
-out:
-	printf("Inode %d %d blkcount %d, errcode = %d\n", ino, __LINE__, blkcount, errcode);
-	ext2fs_mark_bb_dirty(fs);
-	ext2fs_extent_free(handle);
-	return 0;
-}
-
-
 
 #ifdef DEBUG
 /*

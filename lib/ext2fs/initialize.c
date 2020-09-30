@@ -605,10 +605,11 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 			ext2fs_bg_free_blocks_count_set(fs, group,
 							group_free);
 			if (uninit && blk != ext2fs_blocks_count(fs->super) - 1)
-				ext2fs_bg_flags_set(fs, group, EXT2_BG_BLOCK_UNINIT);
+				ext2fs_bg_flags_set(fs, group,
+							EXT2_BG_BLOCK_UNINIT);
 			else
-				ext2fs_bg_flags_clear(fs, group, EXT2_BG_BLOCK_UNINIT);
-
+				ext2fs_bg_flags_clear(fs, group,
+							EXT2_BG_BLOCK_UNINIT);
 			count = 0;
 			group_free = 0;
 			uninit = 1;
@@ -616,7 +617,6 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 		}
 	}
 	total_free = EXT2FS_C2B(fs, total_free);
-	printf("Setting free count to %d\n", total_free);
 	ext2fs_free_blocks_count_set(fs->super, total_free);
 
 	/*
@@ -633,22 +633,22 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 		if (!ext2fs_test_inode_bitmap2(fs->inode_map, ino)) {
 			group_free++;
 			total_free++;
-			if (ino >= 131073 && ino <= 131075)
-				printf("ino %d - FREE\n", ino);
 		} else {
 			last_allocated = ino;
-			if (ino >= 131073 && ino <= 131075)
-				printf("ino %d - ALLOC\n", ino);
 		}
 		count++;
 		if ((count == fs->super->s_inodes_per_group) ||
 		    (ino == fs->super->s_inodes_count)) {
 			if (last_allocated) {
-				ext2fs_bg_flags_clear(fs, group, EXT2_BG_INODE_UNINIT);
+				ext2fs_bg_flags_clear(fs, group,
+					EXT2_BG_INODE_UNINIT);
 				ext2fs_bg_itable_unused_set(fs, group,
-						fs->super->s_inodes_per_group - (last_allocated % fs->super->s_inodes_per_group)) ;
+					fs->super->s_inodes_per_group -
+					(last_allocated %
+					 fs->super->s_inodes_per_group)) ;
 			} else {
-				ext2fs_bg_flags_set(fs, group, EXT2_BG_INODE_UNINIT);
+				ext2fs_bg_flags_set(fs, group,
+					EXT2_BG_INODE_UNINIT);
 				ext2fs_bg_itable_unused_set(fs, group, 0);
 			}
 			ext2fs_bg_free_inodes_count_set(fs, group, group_free);
@@ -658,8 +658,7 @@ errcode_t ext2fs_calculate_summary_stats(ext2_filsys fs)
 			last_allocated = 0;
 		}
 	}
-	printf("Setting free inodes count %d\n", total_free);
-	//fs->super->s_free_inodes_count = total_free;
-
+	fs->super->s_free_inodes_count = total_free;
+	ext2fs_mark_super_dirty(fs);
 	return 0;
 }

@@ -4,20 +4,16 @@ Pass 2: Checking directory structure
 Pass 3: Checking directory connectivity
 Pass 4: Checking reference counts
 Pass 5: Checking group summary information
-test_filesys: 18/256 files (11.1% non-contiguous), 1198/2048 blocks
+test_filesys: 14/256 files (14.3% non-contiguous), 1348/2048 blocks
 Exit status is 0
 debugfs: ls
- 2  (12) .    2  (12) ..    11  (20) lost+found    12  (12) a    17  (956) b   
+ 2  (12) .    2  (12) ..    11  (20) lost+found    12  (968) a   
 debugfs: ls a/
- 12  (12) .    2  (12) ..    13  (24) bar    15  (12) foo    16  (16) trunc   
- 19  (16) bar_new    13  (920) bar_link   
-debugfs: ex a/bar
+ 12  (12) .    2  (12) ..    13  (12) data    14  (976) new   
+debugfs: ex a/new
 Level Entries       Logical      Physical Length Flags
- 0/ 0   1/  2     0 -    15  2017 -  2032     16 
- 0/ 0   2/  2    16 -    47  1603 -  1634     32 
-debugfs: ex a/trunc
+ 0/ 0   1/  1     0 -     0  1091 -  1091      1 
+debugfs: ex a/data
 Level Entries       Logical      Physical Length Flags
- 0/ 0   1/  1     0 -     0  1921 -  1921      1 
-debugfs: ex a/bar_new
-Level Entries       Logical      Physical Length Flags
- 0/ 0   1/  1     0 -    39  1793 -  1832     40 
+ 0/ 0   1/  2     0 -    15  1603 -  1618     16 
+ 0/ 0   2/  2    16 -   255  1092 -  1331    240 

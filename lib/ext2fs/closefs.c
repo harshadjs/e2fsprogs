@@ -179,22 +179,6 @@ int ext2fs_super_and_bgd_loc(ext2_filsys fs,
 	return numblocks;
 }
 
-static void dump_super(char *msg, struct ext2_super_block *super)
-{
-	int i, j;
-
-	printf ("%s", msg);
-	for (i = 0; i < SUPERBLOCK_SIZE; i += 40) {
-		for (j = 0; j < 40 && i + j <SUPERBLOCK_SIZE; j++) {
-			if (*((unsigned char *)super + i + j) == 0)
-				printf (" ..");
-			else
-				printf(" %02X", *((unsigned char *)super + i + j));
-		}
-		printf ("\n");
-	}
-}
-
 /*
  * This function forces out the primary superblock.  We need to only
  * write out those fields which we have changed, since if the
@@ -212,8 +196,7 @@ static errcode_t write_primary_superblock(ext2_filsys fs,
 	int		check_idx, write_idx, size;
 	errcode_t	retval;
 
-
-	if (1 || !fs->io->manager->write_byte || !fs->orig_super) {
+	if (!fs->io->manager->write_byte || !fs->orig_super) {
 	fallback:
 		io_channel_set_blksize(fs->io, SUPERBLOCK_OFFSET);
 		retval = io_channel_write_blk64(fs->io, 1, -SUPERBLOCK_SIZE,
@@ -225,9 +208,6 @@ static errcode_t write_primary_superblock(ext2_filsys fs,
 	old_super = (__u16 *) fs->orig_super;
 	new_super = (__u16 *) super;
 
-	dump_super("old:\n", old_super);
-	dump_super("new:\n",  new_super);
-
 	for (check_idx = 0; check_idx < SUPERBLOCK_SIZE/2; check_idx++) {
 		if (old_super[check_idx] == new_super[check_idx])
 			continue;
@@ -236,8 +216,8 @@ static errcode_t write_primary_superblock(ext2_filsys fs,
 			if (old_super[check_idx] == new_super[check_idx])
 				break;
 		size = 2 * (check_idx - write_idx);
-#if 1
-		printf("SB:Writing %d bytes starting at %d\n",
+#if 0
+		printf("Writing %d bytes starting at %d\n",
 		       size, write_idx*2);
 #endif
 		retval = io_channel_write_byte(fs->io,
@@ -312,8 +292,6 @@ errcode_t ext2fs_flush2(ext2_filsys fs, int flags)
 	struct ext2fs_numeric_progress_struct progress;
 
 	EXT2_CHECK_MAGIC(fs, EXT2_ET_MAGIC_EXT2FS_FILSYS);
-
-	printf("%s called\n", __func__);
 
 	if ((fs->flags & EXT2_FLAG_SUPER_ONLY) == 0 &&
 	    !ext2fs_has_feature_journal_dev(fs->super) &&
@@ -454,9 +432,7 @@ write_primary_superblock_only:
 	ext2fs_swap_super(super_shadow);
 #endif
 
-	printf("Setting superblock csum...\n");
 	retval = ext2fs_superblock_csum_set(fs, super_shadow);
-	printf("Setting superblock csum returned %d...\n", retval);
 	if (retval)
 		return retval;
 

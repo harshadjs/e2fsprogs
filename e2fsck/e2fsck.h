@@ -226,6 +226,10 @@ typedef struct e2fsck_struct *e2fsck_t;
 
 #define MAX_EXTENT_DEPTH_COUNT 5
 
+/*
+ * This strucutre is used to manage the list of extents in a file. Placing
+ * it here since this is used by fast_commit.h.
+ */
 struct extent_list {
 	blk64_t blocks_freed;
 	struct ext2fs_extent *extents;
@@ -431,7 +435,7 @@ struct e2fsck_struct {
 	/* Undo file */
 	char *undo_file;
 
-	/* Fast commit replay stuff */
+	/* Fast commit replay state */
 	struct e2fsck_fc_replay_state fc_replay_state;
 };
 
@@ -455,6 +459,9 @@ typedef struct region_struct *region_t;
 #define strnlen(str, x) e2fsck_strnlen((str),(x))
 extern int e2fsck_strnlen(const char * s, int count);
 #endif
+
+/* Commonly used helpers */
+#define max(a, b) ((a) > (b) ? (a) : (b))
 
 /*
  * Procedure declarations
@@ -541,9 +548,6 @@ void destroy_encryption_policy_map(e2fsck_t ctx);
 void destroy_encrypted_file_info(e2fsck_t ctx);
 
 /* extents.c */
-#define NUM_EXTENTS	341	/* about one ETB' worth of extents */
-
-
 errcode_t e2fsck_rebuild_extents_later(e2fsck_t ctx, ext2_ino_t ino);
 int e2fsck_ino_will_be_rebuilt(e2fsck_t ctx, ext2_ino_t ino);
 void e2fsck_pass1e(e2fsck_t ctx);

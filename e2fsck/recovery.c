@@ -21,11 +21,6 @@
 #include <linux/blkdev.h>
 #endif
 
-#undef jbd_debug
-#define jbd_debug(__i, ...) do {	\
-	fprintf(stderr, __VA_ARGS__);	\
-	fprintf(stderr, "\n");		\
-} while(0)
 /*
  * Maintain information about the progress of the recovery job, so that
  * the different passes can carry information between them.
@@ -272,8 +267,6 @@ static int fc_do_one_pass(journal_t *journal,
 
 	if (err)
 		jbd_debug(3, "Fast commit replay failed, err = %d\n", err);
-
-	printk(KERN_ERR "fc replay returned %d\n", err);
 
 	return 0;
 }
@@ -814,6 +807,7 @@ static int do_one_pass(journal_t *journal,
 			if (err)
 				goto failed;
 			continue;
+
 		default:
 			jbd_debug(3, "Unrecognised magic %d, end of scan.\n",
 				  blocktype);
@@ -863,7 +857,7 @@ static int scan_revoke_records(journal_t *journal, struct buffer_head *bh,
 {
 	jbd2_journal_revoke_header_t *header;
 	int offset, max;
-	int csum_size = 0;
+	unsigned csum_size = 0;
 	__u32 rcount;
 	int record_len = 4;
 
