@@ -2148,4 +2148,7 @@ static inline unsigned int ext2_dir_htree_level(ext2_filsys fs)
 }
 #endif
 
+/* Commonly used helpers */
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 #endif /* _EXT2FS_EXT2FS_H */
