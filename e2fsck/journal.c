@@ -1598,8 +1598,13 @@ static errcode_t recover_ext3_journal(e2fsck_t ctx)
 		goto errout;
 
 	retval = -jbd2_journal_recover(journal);
-	if (retval)
-		goto errout;
+	if (retval && retval != EFSBADCRC && retval != EFSCORRUPTED) {
+		ctx->fs->flags &= ~EXT2_FLAG_VALID;
+		com_err(ctx->program_name, 0,
+					_("Journal recovery failed "
+					  "on %s\n"), ctx->device_name);
+		fatal_error(ctx, 0);
+	}
 
 	if (journal->j_failed_commit) {
 		pctx.ino = journal->j_failed_commit;
