@@ -383,7 +383,9 @@ out_err:
 
 static int __errcode_to_errno(errcode_t err, const char *func, int line)
 {
-	fprintf(stderr, "Error \"%s\" encountered in %s at line %d\n",
+	if (err == 0)
+		return 0;
+	fprintf(stderr, "Error \"%s\" encountered in function %s at line %d\n",
 		error_message(err), func, line);
 	if (err <= 256)
 		return -err;
